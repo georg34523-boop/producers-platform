@@ -25,11 +25,43 @@ export interface Project {
   name: string
   description: string | null
   expert_id: string | null
+  expert_name: string | null
   producer_id: string | null
   status: ProjectStatus
   created_at: string
   created_by: string | null
   archived_at: string | null
+}
+
+export interface TaskChecklistItem {
+  id: string
+  task_id: string
+  title: string
+  done: boolean
+  position: number
+  created_at: string
+}
+
+export interface Comment {
+  id: string
+  entity_type: CommentEntity
+  entity_id: string
+  author_id: string
+  body: string
+  created_at: string
+}
+
+export interface HelpRequest {
+  id: string
+  project_id: string
+  requester_id: string
+  task_id: string | null
+  title: string
+  body: string | null
+  status: HelpStatus
+  created_at: string
+  resolved_at: string | null
+  resolved_by: string | null
 }
 
 export interface Goal {
