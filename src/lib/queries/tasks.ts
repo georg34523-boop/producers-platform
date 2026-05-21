@@ -16,8 +16,7 @@ export async function listTasks(projectId: string): Promise<TaskRow[]> {
     .select(
       `*,
        assignee:profiles!tasks_assignee_id_fkey(id, full_name, email),
-       checklist:task_checklist_items(id, done),
-       comments_count:comments(count)`,
+       checklist:task_checklist_items(id, done)`,
     )
     .eq('project_id', projectId)
     .is('parent_task_id', null)
@@ -27,15 +26,32 @@ export async function listTasks(projectId: string): Promise<TaskRow[]> {
   if (error) throw new Error(error.message)
   type Raw = Omit<TaskRow, 'checklist' | 'comments_count'> & {
     checklist: { id: string; done: boolean }[]
-    comments_count: { count: number }[]
   }
-  return ((data ?? []) as Raw[]).map((t) => ({
+  const tasks = (data ?? []) as Raw[]
+
+  // Comments — полиморфная связь, считаем отдельным запросом
+  const commentCounts = new Map<string, number>()
+  if (tasks.length > 0) {
+    const { data: cs } = await supabase
+      .from('comments')
+      .select('entity_id')
+      .eq('entity_type', 'task')
+      .in(
+        'entity_id',
+        tasks.map((t) => t.id),
+      )
+    for (const c of (cs ?? []) as { entity_id: string }[]) {
+      commentCounts.set(c.entity_id, (commentCounts.get(c.entity_id) ?? 0) + 1)
+    }
+  }
+
+  return tasks.map((t) => ({
     ...t,
     checklist: {
       total: t.checklist.length,
       done: t.checklist.filter((c) => c.done).length,
     },
-    comments_count: t.comments_count?.[0]?.count ?? 0,
+    comments_count: commentCounts.get(t.id) ?? 0,
   }))
 }
 
