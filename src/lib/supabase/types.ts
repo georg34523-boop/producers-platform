@@ -108,3 +108,35 @@ export interface Task {
   created_by: string | null
   completed_at: string | null
 }
+
+export interface Funnel {
+  id: string
+  project_id: string
+  name: string
+  description: string | null
+  period_start: string
+  period_end: string
+  created_at: string
+  created_by: string | null
+}
+
+export interface FunnelStage {
+  id: string
+  funnel_id: string
+  name: string
+  unit: string | null
+  target_value: number
+  actual_value: number
+  position: number
+  created_at: string
+}
+
+export interface FunnelStageWeek {
+  id: string
+  stage_id: string
+  week_start: string
+  week_end: string
+  target: number
+  actual: number
+  position: number
+}

@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 const TABS = [
   { suffix: '', label: 'Обзор' },
   { suffix: '/goals', label: 'Цели' },
+  { suffix: '/funnels', label: 'Воронки' },
   { suffix: '/tasks', label: 'Задачи' },
   { suffix: '/files', label: 'База знаний' },
 ] as const
