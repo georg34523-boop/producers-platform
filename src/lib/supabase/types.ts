@@ -2,7 +2,103 @@
 // Supabase project is provisioned and credentials are added to .env.local.
 
 export type UserRole = 'team_lead' | 'producer' | 'expert' | 'member'
-export type ProjectStatus = 'active' | 'paused' | 'archived'
+export type ProjectStatus = 'active' | 'paused' | 'archived' | 'candidate'
+
+export type TrackerStatus = 'open' | 'closed'
+export type LaunchStatus = 'on_time' | 'partial' | 'failed'
+export type TrackerLogKind = 'revenue' | 'traffic_spend' | 'leads'
+export type TaskKind =
+  | 'launch'
+  | 'content'
+  | 'communication'
+  | 'tech_request'
+  | 'target_request'
+  | 'analytics'
+  | 'other'
+
+export interface MonthlyTracker {
+  id: string
+  project_id: string
+  year: number
+  month: number
+  status: TrackerStatus
+  revenue_plan: number
+  traffic_enabled: boolean
+  traffic_spend_plan: number
+  nps: number | null
+  launch_status: LaunchStatus | null
+  expert_mood: string | null
+  summary_main: string | null
+  summary_worked: string | null
+  summary_not_worked: string | null
+  summary_changes: string | null
+  created_at: string
+  created_by: string | null
+  closed_at: string | null
+  closed_by: string | null
+}
+
+export interface TrackerDailyLog {
+  id: string
+  tracker_id: string
+  day_date: string
+  kind: TrackerLogKind
+  amount: number
+}
+
+export interface TrackerFunnel {
+  id: string
+  tracker_id: string
+  name: string
+  position: number
+  created_at: string
+}
+
+export interface TrackerFunnelStage {
+  id: string
+  funnel_id: string
+  name: string
+  unit: string
+  plan_value: number
+  position: number
+  created_at: string
+}
+
+export interface TrackerFunnelStageLog {
+  id: string
+  stage_id: string
+  day_date: string
+  amount: number
+}
+
+export interface YearlySummary {
+  id: string
+  project_id: string
+  year: number
+  month: number
+  revenue_plan: number | null
+  revenue_actual: number | null
+  best_funnel_name: string | null
+  best_funnel_conversion: number | null
+  worst_funnel_name: string | null
+  worst_funnel_conversion: number | null
+  traffic_spend: number | null
+  roas: number | null
+  nps: number | null
+  launch_status: LaunchStatus | null
+  insight: string | null
+  flag: 'green' | 'yellow' | 'red' | null
+  transferred_at: string
+  transferred_by: string | null
+}
+
+export interface PlannerSection {
+  id: string
+  project_id: string
+  name: string
+  position: number
+  created_at: string
+}
 export type TaskStatus = 'todo' | 'in_progress' | 'blocked' | 'done'
 export type TaskPriority = 'low' | 'normal' | 'high'
 export type GoalPeriod = 'month' | 'week'

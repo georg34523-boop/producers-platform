@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Folders, LayoutDashboard, LifeBuoy, Target, Users } from 'lucide-react'
+import { Folders, LayoutDashboard, Users } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import type { UserRole } from '@/lib/supabase/types'
@@ -16,9 +16,7 @@ type NavItem = {
 
 const NAV: NavItem[] = [
   { href: '/', label: 'Дашборд', icon: LayoutDashboard, roles: ['team_lead', 'producer', 'expert', 'member'] },
-  { href: '/projects', label: 'Проекты', icon: Folders, roles: ['team_lead', 'producer', 'expert', 'member'] },
-  { href: '/goals', label: 'Цели', icon: Target, roles: ['team_lead', 'producer', 'expert', 'member'] },
-  { href: '/help', label: 'Запросы помощи', icon: LifeBuoy, roles: ['team_lead', 'producer'] },
+  { href: '/projects', label: 'Эксперты', icon: Folders, roles: ['team_lead', 'producer', 'expert', 'member'] },
   { href: '/team', label: 'Команда', icon: Users, roles: ['team_lead'] },
 ]
 

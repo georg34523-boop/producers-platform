@@ -1,181 +1,92 @@
 import 'server-only'
 
 import { createClient } from '@/lib/supabase/server'
-import type { Profile } from '@/lib/supabase/types'
 
-export type ProjectProgress = {
+function thisMonth(): { year: number; month: number } {
+  const d = new Date()
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 }
+}
+
+export type ProjectRow = {
   id: string
   name: string
+  expert_name: string | null
   status: string
   producer_name: string | null
-  metrics: {
-    name: string
-    unit: string | null
-    target_value: number
-    actual_value: number
-    progress: number
-  }[]
-  overall_progress: number | null
+  revenue_plan: number
+  revenue_actual: number
+  revenue_pct: number
+  flag: 'green' | 'yellow' | 'red'
+  has_tracker: boolean
 }
 
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10)
+function flagFor(pct: number): 'green' | 'yellow' | 'red' {
+  if (pct >= 85) return 'green'
+  if (pct >= 70) return 'yellow'
+  return 'red'
 }
 
-function monthStartIso(): string {
-  const d = new Date()
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-01`
-}
-
-export async function getProjectsProgress(): Promise<ProjectProgress[]> {
+/** Все проекты с их месячным трекером за текущий месяц (если есть). */
+export async function listProjectsWithCurrentTracker(): Promise<ProjectRow[]> {
   const supabase = await createClient()
-  const month = monthStartIso()
+  const { year, month } = thisMonth()
 
   const { data: projects, error } = await supabase
     .from('projects')
     .select(
-      `id, name, status,
-       producer:profiles!projects_producer_id_fkey(id, full_name, email),
-       goals!goals_project_id_fkey(
-         id, period_type, period_start,
-         metrics:goal_metrics(name, unit, target_value, actual_value)
+      `id, name, expert_name, status,
+       producer:profiles!projects_producer_id_fkey(full_name, email),
+       trackers:monthly_trackers!monthly_trackers_project_id_fkey(
+         id, year, month, revenue_plan
        )`,
     )
-    .eq('status', 'active')
+    .neq('status', 'archived')
 
   if (error) throw new Error(error.message)
 
-  type ProjectRow = {
+  type Raw = {
     id: string
     name: string
+    expert_name: string | null
     status: string
-    producer: Pick<Profile, 'id' | 'full_name' | 'email'> | null
-    goals:
-      | Array<{
-          id: string
-          period_type: 'month' | 'week'
-          period_start: string
-          metrics: Array<{ name: string; unit: string | null; target_value: number; actual_value: number }>
-        }>
-      | null
+    producer: { full_name: string | null; email: string } | null
+    trackers: { id: string; year: number; month: number; revenue_plan: number }[]
+  }
+  const rows = (projects ?? []) as unknown as Raw[]
+
+  // Get actuals from daily logs for all trackers of the current month
+  const trackerIds = rows
+    .map((r) => r.trackers.find((t) => t.year === year && t.month === month)?.id)
+    .filter((v): v is string => Boolean(v))
+
+  const actualByTracker = new Map<string, number>()
+  if (trackerIds.length > 0) {
+    const { data: logs } = await supabase
+      .from('tracker_daily_logs')
+      .select('tracker_id, amount')
+      .eq('kind', 'revenue')
+      .in('tracker_id', trackerIds)
+    for (const l of (logs ?? []) as { tracker_id: string; amount: number }[]) {
+      actualByTracker.set(l.tracker_id, (actualByTracker.get(l.tracker_id) ?? 0) + Number(l.amount))
+    }
   }
 
-  return ((projects ?? []) as unknown as ProjectRow[]).map((p) => {
-    const currentMonth = p.goals?.filter(
-      (g) => g.period_type === 'month' && g.period_start === month,
-    )
-    const metrics =
-      currentMonth?.flatMap((g) =>
-        g.metrics.map((m) => ({
-          name: m.name,
-          unit: m.unit,
-          target_value: m.target_value,
-          actual_value: m.actual_value,
-          progress:
-            m.target_value > 0
-              ? Math.min(100, Math.round((m.actual_value / m.target_value) * 100))
-              : 0,
-        })),
-      ) ?? []
-    const overall =
-      metrics.length > 0
-        ? Math.round(metrics.reduce((s, m) => s + m.progress, 0) / metrics.length)
-        : null
-
+  return rows.map((r) => {
+    const t = r.trackers.find((x) => x.year === year && x.month === month)
+    const plan = t?.revenue_plan ?? 0
+    const actual = t ? (actualByTracker.get(t.id) ?? 0) : 0
+    const pct = plan > 0 ? Math.round((actual / plan) * 100) : 0
     return {
-      id: p.id,
-      name: p.name,
-      status: p.status,
-      producer_name: p.producer?.full_name ?? p.producer?.email ?? null,
-      metrics,
-      overall_progress: overall,
+      id: r.id,
+      name: r.name,
+      expert_name: r.expert_name,
+      status: r.status,
+      producer_name: r.producer?.full_name ?? r.producer?.email ?? null,
+      revenue_plan: plan,
+      revenue_actual: actual,
+      revenue_pct: pct,
+      flag: flagFor(pct),
+      has_tracker: Boolean(t),
     }
   })
-}
-
-export type TodayTask = {
-  id: string
-  project_id: string
-  project_name: string
-  title: string
-  status: string
-  assignee_name: string | null
-  due_date: string | null
-}
-
-export async function getTodayTasks(forUserId: string): Promise<TodayTask[]> {
-  const supabase = await createClient()
-  const today = todayIso()
-  const { data, error } = await supabase
-    .from('tasks')
-    .select(
-      `id, project_id, title, status, due_date,
-       project:projects!tasks_project_id_fkey(name),
-       assignee:profiles!tasks_assignee_id_fkey(full_name, email)`,
-    )
-    .neq('status', 'done')
-    .or(`assignee_id.eq.${forUserId},due_date.lte.${today}`)
-    .order('due_date', { ascending: true, nullsFirst: false })
-    .limit(20)
-
-  if (error) throw new Error(error.message)
-  type Row = {
-    id: string
-    project_id: string
-    title: string
-    status: string
-    due_date: string | null
-    project: { name: string } | null
-    assignee: { full_name: string | null; email: string } | null
-  }
-  return ((data ?? []) as unknown as Row[]).map((r) => ({
-    id: r.id,
-    project_id: r.project_id,
-    project_name: r.project?.name ?? '—',
-    title: r.title,
-    status: r.status,
-    assignee_name: r.assignee?.full_name ?? r.assignee?.email ?? null,
-    due_date: r.due_date,
-  }))
-}
-
-export type OpenHelp = {
-  id: string
-  project_id: string
-  project_name: string
-  title: string
-  requester_name: string
-  created_at: string
-}
-
-export async function getOpenHelpRequests(): Promise<OpenHelp[]> {
-  const supabase = await createClient()
-  const { data, error } = await supabase
-    .from('help_requests')
-    .select(
-      `id, project_id, title, created_at,
-       project:projects!help_requests_project_id_fkey(name),
-       requester:profiles!help_requests_requester_id_fkey(full_name, email)`,
-    )
-    .neq('status', 'resolved')
-    .order('created_at', { ascending: false })
-    .limit(8)
-
-  if (error) throw new Error(error.message)
-  type Row = {
-    id: string
-    project_id: string
-    title: string
-    created_at: string
-    project: { name: string } | null
-    requester: { full_name: string | null; email: string } | null
-  }
-  return ((data ?? []) as unknown as Row[]).map((r) => ({
-    id: r.id,
-    project_id: r.project_id,
-    project_name: r.project?.name ?? '—',
-    title: r.title,
-    requester_name: r.requester?.full_name ?? r.requester?.email ?? '—',
-    created_at: r.created_at,
-  }))
 }
