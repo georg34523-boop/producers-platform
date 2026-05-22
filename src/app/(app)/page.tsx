@@ -15,7 +15,37 @@ const FLAG_COLOR = {
 
 export default async function DashboardPage() {
   const me = await requireProfile()
-  const rows = await listProjectsWithCurrentTracker()
+  const result = await listProjectsWithCurrentTracker()
+
+  if (!result.ok) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Привет, {me.full_name ?? me.email}
+          </h1>
+        </div>
+        <Card>
+          <CardContent className="space-y-2 py-12 text-center text-sm">
+            {result.needsMigration ? (
+              <>
+                <p className="font-medium">
+                  Нужно прогнать миграцию <code className="rounded bg-muted px-1">0004_tz_pivot.sql</code>
+                </p>
+                <p className="text-muted-foreground">
+                  Открой Supabase → SQL Editor → вставь содержимое файла → Run. Потом перезагрузи страницу.
+                </p>
+              </>
+            ) : (
+              <p className="text-destructive">Ошибка: {result.error}</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  const rows = result.rows
   const sorted = [...rows].sort((a, b) => {
     const order = { red: 0, yellow: 1, green: 2 } as const
     return order[a.flag] - order[b.flag]

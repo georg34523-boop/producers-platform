@@ -26,23 +26,27 @@ function flagFor(pct: number): 'green' | 'yellow' | 'red' {
   return 'red'
 }
 
+export type DashboardResult =
+  | { ok: true; rows: ProjectRow[] }
+  | { ok: false; error: string; needsMigration: boolean }
+
 /** Все проекты с их месячным трекером за текущий месяц (если есть). */
-export async function listProjectsWithCurrentTracker(): Promise<ProjectRow[]> {
+export async function listProjectsWithCurrentTracker(): Promise<DashboardResult> {
   const supabase = await createClient()
   const { year, month } = thisMonth()
 
+  // Сначала тянем проекты — без джойна на monthly_trackers, чтобы не падать если миграции нет.
   const { data: projects, error } = await supabase
     .from('projects')
     .select(
       `id, name, expert_name, status,
-       producer:profiles!projects_producer_id_fkey(full_name, email),
-       trackers:monthly_trackers!monthly_trackers_project_id_fkey(
-         id, year, month, revenue_plan
-       )`,
+       producer:profiles!projects_producer_id_fkey(full_name, email)`,
     )
     .neq('status', 'archived')
 
-  if (error) throw new Error(error.message)
+  if (error) {
+    return { ok: false, error: error.message, needsMigration: false }
+  }
 
   type Raw = {
     id: string
@@ -50,15 +54,29 @@ export async function listProjectsWithCurrentTracker(): Promise<ProjectRow[]> {
     expert_name: string | null
     status: string
     producer: { full_name: string | null; email: string } | null
-    trackers: { id: string; year: number; month: number; revenue_plan: number }[]
   }
-  const rows = (projects ?? []) as unknown as Raw[]
+  const rawProjects = (projects ?? []) as unknown as Raw[]
 
-  // Get actuals from daily logs for all trackers of the current month
-  const trackerIds = rows
-    .map((r) => r.trackers.find((t) => t.year === year && t.month === month)?.id)
-    .filter((v): v is string => Boolean(v))
+  // Пробуем подтянуть трекеры — если таблица не существует, возвращаем «нужна миграция»
+  const { data: trackers, error: trErr } = await supabase
+    .from('monthly_trackers')
+    .select('id, project_id, revenue_plan')
+    .eq('year', year)
+    .eq('month', month)
 
+  if (trErr) {
+    if (/does not exist|relation .* does not exist|schema/i.test(trErr.message)) {
+      return { ok: false, error: trErr.message, needsMigration: true }
+    }
+    return { ok: false, error: trErr.message, needsMigration: false }
+  }
+
+  const trackerByProject = new Map<string, { id: string; revenue_plan: number }>()
+  for (const t of (trackers ?? []) as { id: string; project_id: string; revenue_plan: number }[]) {
+    trackerByProject.set(t.project_id, { id: t.id, revenue_plan: t.revenue_plan })
+  }
+
+  const trackerIds = [...trackerByProject.values()].map((t) => t.id)
   const actualByTracker = new Map<string, number>()
   if (trackerIds.length > 0) {
     const { data: logs } = await supabase
@@ -71,8 +89,8 @@ export async function listProjectsWithCurrentTracker(): Promise<ProjectRow[]> {
     }
   }
 
-  return rows.map((r) => {
-    const t = r.trackers.find((x) => x.year === year && x.month === month)
+  const rows = rawProjects.map<ProjectRow>((r) => {
+    const t = trackerByProject.get(r.id)
     const plan = t?.revenue_plan ?? 0
     const actual = t ? (actualByTracker.get(t.id) ?? 0) : 0
     const pct = plan > 0 ? Math.round((actual / plan) * 100) : 0
@@ -89,4 +107,6 @@ export async function listProjectsWithCurrentTracker(): Promise<ProjectRow[]> {
       has_tracker: Boolean(t),
     }
   })
+
+  return { ok: true, rows }
 }
