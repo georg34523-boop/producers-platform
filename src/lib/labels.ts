@@ -1,36 +1,53 @@
-import type { ProjectStatus, UserRole } from '@/lib/supabase/types'
+import type {
+  ExpenseKind,
+  ExpenseRecurrence,
+  LaunchStatus,
+  ProjectStatus,
+  StageKind,
+  UserRole,
+  WorkModel,
+} from '@/lib/supabase/types'
 
 export const ROLE_LABEL: Record<UserRole, string> = {
-  team_lead: 'Тим-лид',
+  coo: 'COO',
+  ceo: 'CEO',
   producer: 'Продюсер',
-  expert: 'Эксперт',
-  member: 'Участник',
 }
 
 export const PROJECT_STATUS_LABEL: Record<ProjectStatus, string> = {
   active: 'Активный',
   paused: 'На паузе',
   archived: 'В архиве',
-  candidate: 'Кандидат',
 }
 
-export const LAUNCH_STATUS_LABEL: Record<'on_time' | 'partial' | 'failed', string> = {
+export const WORK_MODEL_LABEL: Record<WorkModel, string> = {
+  fix_pct: 'Фикс + %',
+  rev_70_30: '70 / 30 от выручки',
+  profit_50_50: '50 / 50 от чистой прибыли',
+}
+
+export const LAUNCH_STATUS_LABEL: Record<LaunchStatus, string> = {
   on_time: 'В срок',
   partial: 'Частично',
   failed: 'Сорван',
 }
 
-export const TASK_KIND_LABEL: Record<
-  'launch' | 'content' | 'communication' | 'tech_request' | 'target_request' | 'analytics' | 'other',
-  string
-> = {
-  launch: 'Запуск',
-  content: 'Контент',
-  communication: 'Коммуникация',
-  tech_request: 'Тех-запрос',
-  target_request: 'Таргет-запрос',
-  analytics: 'Аналитика',
+export const EXPENSE_KIND_LABEL: Record<ExpenseKind, string> = {
+  service: 'Сервис',
+  fot: 'ФОТ',
+  contractor: 'Подрядчик',
   other: 'Прочее',
+}
+
+export const EXPENSE_RECURRENCE_LABEL: Record<ExpenseRecurrence, string> = {
+  monthly: 'Ежемесячный',
+  one_off: 'Разовый',
+}
+
+export const STAGE_KIND_LABEL: Record<StageKind, string> = {
+  application: 'Анкета',
+  intermediate: 'Промежуточный',
+  payment: 'Оплаты',
 }
 
 export const MONTH_LABEL_RU: Record<number, string> = {
@@ -46,14 +63,4 @@ export const MONTH_LABEL_RU: Record<number, string> = {
   10: 'Октябрь',
   11: 'Ноябрь',
   12: 'Декабрь',
-}
-
-export const TASK_STATUS_LABEL: Record<string, string> = {
-  todo: 'Не начато',
-  in_progress: 'В работе',
-  blocked: 'Заблокировано',
-  waiting_tech: 'Ждёт тех',
-  waiting_target: 'Ждёт таргет',
-  waiting_expert: 'Ждёт эксперта',
-  done: 'Готово',
 }

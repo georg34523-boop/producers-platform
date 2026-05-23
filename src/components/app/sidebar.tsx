@@ -15,9 +15,9 @@ type NavItem = {
 }
 
 const NAV: NavItem[] = [
-  { href: '/', label: 'Дашборд', icon: LayoutDashboard, roles: ['team_lead', 'producer', 'expert', 'member'] },
-  { href: '/projects', label: 'Эксперты', icon: Folders, roles: ['team_lead', 'producer', 'expert', 'member'] },
-  { href: '/team', label: 'Команда', icon: Users, roles: ['team_lead'] },
+  { href: '/', label: 'Дашборд', icon: LayoutDashboard, roles: ['coo', 'ceo', 'producer'] },
+  { href: '/projects', label: 'Проекты', icon: Folders, roles: ['coo', 'ceo', 'producer'] },
+  { href: '/team', label: 'Команда', icon: Users, roles: ['coo', 'ceo'] },
 ]
 
 export function Sidebar({ role }: { role: UserRole }) {

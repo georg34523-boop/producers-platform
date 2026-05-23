@@ -10,7 +10,7 @@ import { RoleSelect } from './role-select'
 
 export default async function TeamPage() {
   const me = await requireProfile()
-  if (me.role !== 'team_lead') redirect('/')
+  if (me.role !== 'coo' && me.role !== 'ceo') redirect('/')
 
   const profiles = await listProfiles()
 

@@ -7,7 +7,7 @@ import type { UserRole } from '@/lib/supabase/types'
 
 import { changeRole } from './actions'
 
-const ROLES: UserRole[] = ['team_lead', 'producer']
+const ROLES: UserRole[] = ['coo', 'ceo', 'producer']
 
 export function RoleSelect({ userId, role }: { userId: string; role: UserRole }) {
   const [pending, startTransition] = useTransition()

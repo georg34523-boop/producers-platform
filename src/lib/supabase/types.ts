@@ -1,20 +1,69 @@
-// Hand-rolled types for now; will be regenerated via `supabase gen types typescript` once the
-// Supabase project is provisioned and credentials are added to .env.local.
+// Ручные TS-типы по схеме миграции 0005_reset_to_tz.sql.
+// Сгенерируем через supabase gen types typescript, когда будут CLI/keys.
 
-export type UserRole = 'team_lead' | 'producer' | 'expert' | 'member'
-export type ProjectStatus = 'active' | 'paused' | 'archived' | 'candidate'
-
+export type UserRole = 'coo' | 'ceo' | 'producer'
+export type ProjectStatus = 'active' | 'paused' | 'archived'
+export type WorkModel = 'fix_pct' | 'rev_70_30' | 'profit_50_50'
+export type ProductStatus = 'active' | 'archived'
 export type TrackerStatus = 'open' | 'closed'
 export type LaunchStatus = 'on_time' | 'partial' | 'failed'
-export type TrackerLogKind = 'revenue' | 'traffic_spend' | 'leads'
-export type TaskKind =
-  | 'launch'
-  | 'content'
-  | 'communication'
-  | 'tech_request'
-  | 'target_request'
-  | 'analytics'
-  | 'other'
+export type ExpenseKind = 'service' | 'fot' | 'contractor' | 'other'
+export type ExpenseRecurrence = 'monthly' | 'one_off'
+export type StageKind = 'application' | 'intermediate' | 'payment'
+
+export interface Profile {
+  id: string
+  email: string
+  full_name: string | null
+  role: UserRole
+  avatar_url: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface Project {
+  id: string
+  expert_name: string
+  expert_contacts: string | null
+  producer_id: string | null
+  status: ProjectStatus
+  work_model: WorkModel
+  fix_amount: number | null
+  model_started_at: string
+  created_at: string
+  created_by: string | null
+}
+
+export interface ProjectModelHistory {
+  id: string
+  project_id: string
+  changed_at: string
+  changed_by: string | null
+  from_model: WorkModel | null
+  to_model: WorkModel
+  effective_from: string
+}
+
+export interface Product {
+  id: string
+  project_id: string
+  name: string
+  description: string | null
+  current_price: number
+  status: ProductStatus
+  position: number
+  created_at: string
+  created_by: string | null
+}
+
+export interface ProductPriceHistory {
+  id: string
+  product_id: string
+  old_price: number | null
+  new_price: number
+  changed_at: string
+  changed_by: string | null
+}
 
 export interface MonthlyTracker {
   id: string
@@ -22,9 +71,13 @@ export interface MonthlyTracker {
   year: number
   month: number
   status: TrackerStatus
-  revenue_plan: number
+  revenue_plan_min: number
+  revenue_plan_avg: number
+  revenue_plan_max: number
+  sales_plan: number
+  applications_plan: number
+  avg_check_plan: number
   traffic_enabled: boolean
-  traffic_spend_plan: number
   nps: number | null
   launch_status: LaunchStatus | null
   expert_mood: string | null
@@ -38,201 +91,88 @@ export interface MonthlyTracker {
   closed_by: string | null
 }
 
-export interface TrackerDailyLog {
+export interface TrackerWeeklyPlan {
   id: string
   tracker_id: string
-  day_date: string
-  kind: TrackerLogKind
-  amount: number
+  week_index: number
+  revenue_plan: number
 }
 
-export interface TrackerFunnel {
+export interface TrackerCustomDriver {
   id: string
   tracker_id: string
-  name: string
-  position: number
-  created_at: string
-}
-
-export interface TrackerFunnelStage {
-  id: string
-  funnel_id: string
-  name: string
-  unit: string
-  plan_value: number
-  position: number
-  created_at: string
-}
-
-export interface TrackerFunnelStageLog {
-  id: string
-  stage_id: string
-  day_date: string
-  amount: number
-}
-
-export interface YearlySummary {
-  id: string
-  project_id: string
-  year: number
-  month: number
-  revenue_plan: number | null
-  revenue_actual: number | null
-  best_funnel_name: string | null
-  best_funnel_conversion: number | null
-  worst_funnel_name: string | null
-  worst_funnel_conversion: number | null
-  traffic_spend: number | null
-  roas: number | null
-  nps: number | null
-  launch_status: LaunchStatus | null
-  insight: string | null
-  flag: 'green' | 'yellow' | 'red' | null
-  transferred_at: string
-  transferred_by: string | null
-}
-
-export interface PlannerSection {
-  id: string
-  project_id: string
-  name: string
-  position: number
-  created_at: string
-}
-export type TaskStatus = 'todo' | 'in_progress' | 'blocked' | 'done'
-export type TaskPriority = 'low' | 'normal' | 'high'
-export type GoalPeriod = 'month' | 'week'
-export type HelpStatus = 'open' | 'in_progress' | 'resolved'
-export type CommentEntity = 'task' | 'goal' | 'project' | 'help_request'
-
-export interface Profile {
-  id: string
-  email: string
-  full_name: string | null
-  role: UserRole
-  telegram_chat_id: string | null
-  avatar_url: string | null
-  created_at: string
-  updated_at: string
-}
-
-export interface Project {
-  id: string
-  name: string
-  description: string | null
-  expert_id: string | null
-  expert_name: string | null
-  producer_id: string | null
-  status: ProjectStatus
-  created_at: string
-  created_by: string | null
-  archived_at: string | null
-}
-
-export interface TaskChecklistItem {
-  id: string
-  task_id: string
-  title: string
-  done: boolean
-  position: number
-  created_at: string
-}
-
-export interface Comment {
-  id: string
-  entity_type: CommentEntity
-  entity_id: string
-  author_id: string
-  body: string
-  created_at: string
-}
-
-export interface HelpRequest {
-  id: string
-  project_id: string
-  requester_id: string
-  task_id: string | null
-  title: string
-  body: string | null
-  status: HelpStatus
-  created_at: string
-  resolved_at: string | null
-  resolved_by: string | null
-}
-
-export interface Goal {
-  id: string
-  project_id: string
-  parent_goal_id: string | null
-  period_type: GoalPeriod
-  period_start: string
-  period_end: string
-  title: string
-  notes: string | null
-  created_at: string
-  created_by: string | null
-}
-
-export interface GoalMetric {
-  id: string
-  goal_id: string
   name: string
   unit: string | null
-  target_value: number
+  plan_value: number
   actual_value: number
-  sheet_url: string | null
-  sheet_cell: string | null
-  last_synced_at: string | null
-  display_order: number
-  created_at: string
-}
-
-export interface Task {
-  id: string
-  project_id: string
-  parent_task_id: string | null
-  goal_id: string | null
-  title: string
-  description: string | null
-  status: TaskStatus
-  priority: TaskPriority
-  assignee_id: string | null
-  due_date: string | null
-  recurring_rule: string | null
   position: number
-  created_at: string
-  created_by: string | null
-  completed_at: string | null
 }
 
 export interface Funnel {
   id: string
-  project_id: string
+  tracker_id: string
   name: string
-  description: string | null
-  period_start: string
-  period_end: string
+  is_mini_product: boolean
+  position: number
   created_at: string
-  created_by: string | null
 }
 
 export interface FunnelStage {
   id: string
   funnel_id: string
   name: string
-  unit: string | null
-  target_value: number
-  actual_value: number
+  kind: StageKind
+  plan_value: number
   position: number
-  created_at: string
 }
 
-export interface FunnelStageWeek {
+export interface FunnelStageDailyLog {
   id: string
   stage_id: string
-  week_start: string
-  week_end: string
-  target: number
-  actual: number
-  position: number
+  day_date: string
+  amount: number
+}
+
+export interface FunnelSale {
+  id: string
+  funnel_id: string
+  product_id: string
+  day_date: string
+  qty: number
+  unit_price: number
+  notes: string | null
+  created_at: string
+  created_by: string | null
+}
+
+export interface FunnelTrafficDaily {
+  id: string
+  funnel_id: string
+  day_date: string
+  amount: number
+}
+
+export interface ProjectExpense {
+  id: string
+  project_id: string
+  name: string
+  kind: ExpenseKind
+  recurrence: ExpenseRecurrence
+  amount: number
+  start_date: string
+  end_date: string | null
+  one_off_date: string | null
+  created_at: string
+  created_by: string | null
+}
+
+export interface ProjectReturn {
+  id: string
+  project_id: string
+  product_id: string | null
+  day_date: string
+  amount: number
+  reason: string | null
+  created_at: string
+  created_by: string | null
 }

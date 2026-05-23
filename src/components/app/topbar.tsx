@@ -1,14 +1,8 @@
 import { signOut } from '@/app/login/actions'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
+import { ROLE_LABEL } from '@/lib/labels'
 import type { Profile } from '@/lib/supabase/types'
-
-const ROLE_LABEL: Record<Profile['role'], string> = {
-  team_lead: 'Тим-лид',
-  producer: 'Продюсер',
-  expert: 'Эксперт',
-  member: 'Участник',
-}
 
 function initials(name: string | null, email: string): string {
   const src = (name ?? email).trim()

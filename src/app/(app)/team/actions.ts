@@ -10,7 +10,7 @@ import { createClient } from '@/lib/supabase/server'
 const InviteSchema = z.object({
   email: z.email({ error: 'Введи корректный email' }).trim().toLowerCase(),
   full_name: z.string().min(2, { error: 'Минимум 2 символа' }).trim(),
-  role: z.enum(['team_lead', 'producer', 'expert', 'member']),
+  role: z.enum(['coo', 'ceo', 'producer']),
   password: z.string().min(8, { error: 'Минимум 8 символов' }),
 })
 
@@ -23,7 +23,7 @@ export async function inviteUser(
   formData: FormData,
 ): Promise<TeamFormState> {
   const me = await requireProfile()
-  if (me.role !== 'team_lead') return { error: 'Только тим-лид' }
+  if (me.role !== 'coo' && me.role !== 'ceo') return { error: 'Только COO/CEO' }
 
   const parsed = InviteSchema.safeParse({
     email: formData.get('email'),
@@ -62,12 +62,12 @@ export async function inviteUser(
 
 const RoleChangeSchema = z.object({
   user_id: z.uuid(),
-  role: z.enum(['team_lead', 'producer', 'expert', 'member']),
+  role: z.enum(['coo', 'ceo', 'producer']),
 })
 
 export async function changeRole(formData: FormData): Promise<void> {
   const me = await requireProfile()
-  if (me.role !== 'team_lead') return
+  if (me.role !== 'coo' && me.role !== 'ceo') return
 
   const parsed = RoleChangeSchema.safeParse({
     user_id: formData.get('user_id'),

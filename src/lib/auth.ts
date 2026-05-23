@@ -10,9 +10,8 @@ const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === '1'
 const DEMO_PROFILE: Profile = {
   id: '00000000-0000-0000-0000-000000000001',
   email: 'demo@producers.local',
-  full_name: 'Тим-лид (демо)',
-  role: 'team_lead',
-  telegram_chat_id: null,
+  full_name: 'COO (демо)',
+  role: 'coo',
   avatar_url: null,
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
