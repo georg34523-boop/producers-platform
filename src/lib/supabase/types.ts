@@ -9,7 +9,6 @@ export type TrackerStatus = 'open' | 'closed'
 export type LaunchStatus = 'on_time' | 'partial' | 'failed'
 export type ExpenseKind = 'service' | 'fot' | 'contractor' | 'other'
 export type ExpenseRecurrence = 'monthly' | 'one_off'
-export type StageKind = 'application' | 'intermediate' | 'payment'
 
 export interface Profile {
   id: string
@@ -113,43 +112,35 @@ export interface Funnel {
   tracker_id: string
   name: string
   is_mini_product: boolean
+  product_id: string | null
+  applications_plan: number
+  sales_plan: number
+  revenue_plan: number
   position: number
   created_at: string
 }
 
-export interface FunnelStage {
+export interface FunnelMiniPrice {
   id: string
   funnel_id: string
   name: string
-  kind: StageKind
-  plan_value: number
+  price: number
   position: number
-}
-
-export interface FunnelStageDailyLog {
-  id: string
-  stage_id: string
-  day_date: string
-  amount: number
-}
-
-export interface FunnelSale {
-  id: string
-  funnel_id: string
-  product_id: string
-  day_date: string
-  qty: number
-  unit_price: number
-  notes: string | null
   created_at: string
-  created_by: string | null
 }
 
-export interface FunnelTrafficDaily {
+export interface FunnelDailyJournal {
   id: string
   funnel_id: string
   day_date: string
-  amount: number
+  applications: number
+  op_calls: number
+  sales_count: number
+  revenue: number
+  traffic_spend: number
+  comment: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface ProjectExpense {

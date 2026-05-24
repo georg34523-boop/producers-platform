@@ -3,10 +3,8 @@ import 'server-only'
 import { createClient } from '@/lib/supabase/server'
 import type {
   Funnel,
-  FunnelSale,
-  FunnelStage,
-  FunnelStageDailyLog,
-  FunnelTrafficDaily,
+  FunnelDailyJournal,
+  FunnelMiniPrice,
   MonthlyTracker,
   TrackerCustomDriver,
   TrackerWeeklyPlan,
@@ -45,11 +43,12 @@ export async function getOrCreateTracker(
     .maybeSingle()
   if (existing) return existing as MonthlyTracker
 
-  // Скопировать планы из предыдущего месяца, если есть
   const prevDate = new Date(Date.UTC(year, month - 2, 1))
   const { data: prev } = await supabase
     .from('monthly_trackers')
-    .select('revenue_plan_min, revenue_plan_avg, revenue_plan_max, sales_plan, applications_plan, avg_check_plan, traffic_enabled')
+    .select(
+      'revenue_plan_min, revenue_plan_avg, revenue_plan_max, sales_plan, applications_plan, avg_check_plan, traffic_enabled',
+    )
     .eq('project_id', projectId)
     .eq('year', prevDate.getUTCFullYear())
     .eq('month', prevDate.getUTCMonth() + 1)
@@ -97,50 +96,52 @@ export async function getCustomDrivers(trackerId: string): Promise<TrackerCustom
   return (data ?? []) as TrackerCustomDriver[]
 }
 
-export type FunnelWithEverything = Funnel & {
-  product_ids: string[]
-  stages: (FunnelStage & { logs: FunnelStageDailyLog[] })[]
-  sales: FunnelSale[]
-  traffic: FunnelTrafficDaily[]
+export type FunnelWithJournal = Funnel & {
+  mini_prices: FunnelMiniPrice[]
+  journal: FunnelDailyJournal[]
 }
 
-export async function getFunnels(trackerId: string): Promise<FunnelWithEverything[]> {
+export async function getFunnels(trackerId: string): Promise<FunnelWithJournal[]> {
   const supabase = await createClient()
-  const { data: funnels } = await supabase
+  const { data } = await supabase
     .from('funnels')
-    .select(
-      `*,
-       funnel_products(product_id),
-       stages:funnel_stages(*, logs:funnel_stage_daily_logs(*)),
-       sales:funnel_sales(*),
-       traffic:funnel_traffic_daily(*)`,
-    )
+    .select(`*, mini_prices:funnel_mini_prices(*), journal:funnel_daily_journal(*)`)
     .eq('tracker_id', trackerId)
     .order('position')
-
-  type Raw = Funnel & {
-    funnel_products: { product_id: string }[]
-    stages: (FunnelStage & { logs: FunnelStageDailyLog[] })[]
-    sales: FunnelSale[]
-    traffic: FunnelTrafficDaily[]
-  }
-
-  return ((funnels ?? []) as unknown as Raw[]).map((f) => ({
+  type Raw = Funnel & { mini_prices: FunnelMiniPrice[]; journal: FunnelDailyJournal[] }
+  return ((data ?? []) as unknown as Raw[]).map((f) => ({
     ...f,
-    product_ids: f.funnel_products.map((p) => p.product_id),
-    stages: [...f.stages].sort((a, b) => a.position - b.position),
+    mini_prices: [...f.mini_prices].sort((a, b) => a.position - b.position),
+    journal: [...f.journal].sort((a, b) => a.day_date.localeCompare(b.day_date)),
   }))
 }
 
-/** Все продажи трекера сразу — для агрегаций (драйверы, юниты). */
-export async function getAllSales(trackerId: string): Promise<FunnelSale[]> {
-  const supabase = await createClient()
-  const { data: funnels } = await supabase
-    .from('funnels')
-    .select('id')
-    .eq('tracker_id', trackerId)
-  const funnelIds = (funnels ?? []).map((f) => f.id)
-  if (funnelIds.length === 0) return []
-  const { data } = await supabase.from('funnel_sales').select('*').in('funnel_id', funnelIds)
-  return (data ?? []) as FunnelSale[]
+/** Аггрегаты по воронке за период. */
+export type FunnelTotals = {
+  applications: number
+  op_calls: number
+  sales_count: number
+  revenue: number
+  traffic_spend: number
+}
+export function aggregateFunnel(
+  journal: FunnelDailyJournal[],
+  inRange?: (day: string) => boolean,
+): FunnelTotals {
+  const acc: FunnelTotals = {
+    applications: 0,
+    op_calls: 0,
+    sales_count: 0,
+    revenue: 0,
+    traffic_spend: 0,
+  }
+  for (const r of journal) {
+    if (inRange && !inRange(r.day_date)) continue
+    acc.applications += r.applications
+    acc.op_calls += r.op_calls
+    acc.sales_count += r.sales_count
+    acc.revenue += Number(r.revenue)
+    acc.traffic_spend += Number(r.traffic_spend)
+  }
+  return acc
 }

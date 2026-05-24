@@ -5,9 +5,9 @@ import { getProject } from '@/lib/queries/projects'
 import { listProducts } from '@/lib/queries/products'
 import { listExpenses, listReturns } from '@/lib/queries/expenses'
 import {
-  getOrCreateTracker,
   getCustomDrivers,
   getFunnels,
+  getOrCreateTracker,
   nowYearMonth,
 } from '@/lib/queries/tracker'
 import { computeUnits, currentMonthRange } from '@/lib/units'
@@ -27,49 +27,35 @@ export default async function ProjectOverviewPage({
   if (!project) notFound()
 
   const { year, month } = nowYearMonth()
-  const [tracker, products, expenses, returns, customDrivers] = await Promise.all([
-    getOrCreateTracker(id, year, month),
+  const tracker = await getOrCreateTracker(id, year, month)
+  const [funnels, products, expenses, returns, customDrivers] = await Promise.all([
+    getFunnels(tracker.id),
     listProducts(id),
     listExpenses(id),
     listReturns(id),
-    Promise.resolve([]).then(() => null), // placeholder; loaded below
-  ])
-  // тяну funnels отдельно, чтобы и custom drivers получить
-  const [funnels, customDriversReal] = await Promise.all([
-    getFunnels(tracker.id),
     getCustomDrivers(tracker.id),
   ])
-  void customDrivers
 
-  // Драйверы
   const monthRange = currentMonthRange(year, month)
-  const allSales = funnels.flatMap((f) => f.sales)
+  const allJournal = funnels.flatMap((f) => f.journal)
   const inMonth = (d: string) => {
     const dt = new Date(d + 'T00:00:00Z')
     return dt >= monthRange.from && dt <= monthRange.to
   }
-  const monthSales = allSales.filter((s) => inMonth(s.day_date))
-  const revenue = monthSales.reduce((s, x) => s + Number(x.unit_price) * x.qty, 0)
-  const salesCount = monthSales.reduce((s, x) => s + x.qty, 0)
+  const monthRows = allJournal.filter((r) => inMonth(r.day_date))
+  const revenue = monthRows.reduce((s, r) => s + Number(r.revenue), 0)
+  const salesCount = monthRows.reduce((s, r) => s + r.sales_count, 0)
   const avgCheck = salesCount > 0 ? revenue / salesCount : 0
-  // Анкеты: сумма дневных логов по этапам типа 'application' за месяц
-  const applications = funnels
-    .flatMap((f) => f.stages)
-    .filter((st) => st.kind === 'application')
-    .flatMap((st) => st.logs)
-    .filter((l) => inMonth(l.day_date))
-    .reduce((s, l) => s + Number(l.amount), 0)
+  const applications = monthRows.reduce((s, r) => s + r.applications, 0)
 
-  // Юниты (краткие)
   const units = computeUnits({
     project: { work_model: project.work_model, fix_amount: project.fix_amount },
     products,
-    sales: allSales,
     funnels: funnels.map((f) => ({
-      funnel_id: f.id,
+      id: f.id,
+      product_id: f.product_id,
       is_mini_product: f.is_mini_product,
-      revenue: f.sales.reduce((s, x) => s + Number(x.unit_price) * x.qty, 0),
-      traffic: f.traffic.reduce((s, x) => s + Number(x.amount), 0),
+      journal: f.journal,
     })),
     expenses,
     returns,
@@ -77,7 +63,6 @@ export default async function ProjectOverviewPage({
     to: monthRange.to,
   })
 
-  // Прогресс выручки относительно среднего плана
   const planAvg = Number(tracker.revenue_plan_avg)
   const planMin = Number(tracker.revenue_plan_min)
   const planMax = Number(tracker.revenue_plan_max)
@@ -85,61 +70,53 @@ export default async function ProjectOverviewPage({
 
   return (
     <div className="space-y-6">
-      {/* Блок: Цели месяца */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Цели месяца</CardTitle>
+          <CardTitle className="text-base">Цілі місяця</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-3 gap-3 text-center">
-            <PlanBox label="Минимум" value={planMin} />
-            <PlanBox label="Средний" value={planAvg} highlight />
+            <PlanBox label="Мінімум" value={planMin} />
+            <PlanBox label="Середній" value={planAvg} highlight />
             <PlanBox label="Максимум" value={planMax} />
           </div>
           <div>
             <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-              <span>Факт месяца: {fmt(revenue)}</span>
-              <span>{pct}% от среднего</span>
+              <span>Факт місяця: {fmt(revenue)}</span>
+              <span>{pct}% від середнього</span>
             </div>
             <ProgressBar pct={pct} />
           </div>
         </CardContent>
       </Card>
 
-      {/* Блок: Декомпозиция на драйверы */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Декомпозиция цели</CardTitle>
+          <CardTitle className="text-base">Декомпозиція цілі</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <DriverBox label="Выручка, $" plan={planAvg} actual={revenue} />
-          <DriverBox label="Число продаж" plan={Number(tracker.sales_plan)} actual={salesCount} />
-          <DriverBox label="Средний чек, $" plan={Number(tracker.avg_check_plan)} actual={avgCheck} />
-          <DriverBox label="Число анкет" plan={Number(tracker.applications_plan)} actual={applications} />
+          <DriverBox label="Виручка, $" plan={planAvg} actual={revenue} />
+          <DriverBox label="Продажі" plan={Number(tracker.sales_plan)} actual={salesCount} />
+          <DriverBox label="Середній чек, $" plan={Number(tracker.avg_check_plan)} actual={avgCheck} />
+          <DriverBox label="Анкети" plan={Number(tracker.applications_plan)} actual={applications} />
         </CardContent>
-        {customDriversReal.length > 0 ? (
+        {customDrivers.length > 0 ? (
           <CardContent className="grid gap-3 border-t pt-4 sm:grid-cols-2 lg:grid-cols-4">
-            {customDriversReal.map((cd) => (
-              <DriverBox
-                key={cd.id}
-                label={cd.name + (cd.unit ? `, ${cd.unit}` : '')}
-                plan={Number(cd.plan_value)}
-                actual={Number(cd.actual_value)}
-              />
+            {customDrivers.map((cd) => (
+              <DriverBox key={cd.id} label={cd.name + (cd.unit ? `, ${cd.unit}` : '')} plan={Number(cd.plan_value)} actual={Number(cd.actual_value)} />
             ))}
           </CardContent>
         ) : null}
       </Card>
 
-      {/* Блок: Краткие юниты */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Краткие юниты месяца</CardTitle>
+          <CardTitle className="text-base">Юніти місяця</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3 sm:grid-cols-3">
-          <BigNum label="Выручка проекта" value={units.gross_revenue} />
-          <BigNum label="Доход центра" value={units.center_income} />
-          <BigNum label="Чистая прибыль центра" value={units.net_profit} />
+          <BigNum label="Виручка проєкту" value={units.gross_revenue} />
+          <BigNum label="Дохід центру" value={units.center_income} />
+          <BigNum label="Чистий прибуток центру" value={units.net_profit} />
         </CardContent>
       </Card>
     </div>
@@ -158,10 +135,7 @@ function PlanBox({ label, value, highlight }: { label: string; value: number; hi
 function ProgressBar({ pct }: { pct: number }) {
   return (
     <div className="h-2 overflow-hidden rounded bg-muted">
-      <div
-        className={cn('h-full transition-all', pct >= 100 ? 'bg-emerald-500' : 'bg-foreground/70')}
-        style={{ width: `${pct}%` }}
-      />
+      <div className={cn('h-full', pct >= 100 ? 'bg-emerald-500' : 'bg-foreground/70')} style={{ width: `${pct}%` }} />
     </div>
   )
 }
@@ -176,10 +150,7 @@ function DriverBox({ label, plan, actual }: { label: string; plan: number; actua
         <span className="text-muted-foreground"> / {fmt(plan)}</span>
       </div>
       <div className="mt-1.5 h-1 overflow-hidden rounded bg-muted">
-        <div
-          className={cn('h-full', pct >= 100 ? 'bg-emerald-500' : 'bg-foreground/70')}
-          style={{ width: `${Math.min(100, pct)}%` }}
-        />
+        <div className={cn('h-full', pct >= 100 ? 'bg-emerald-500' : 'bg-foreground/70')} style={{ width: `${Math.min(100, pct)}%` }} />
       </div>
       <div className="mt-0.5 text-[11px] text-muted-foreground">{pct}%</div>
     </div>

@@ -8,6 +8,10 @@ function thisMonth(): { year: number; month: number } {
   return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 }
 }
 
+function daysInMonth(y: number, m: number): number {
+  return new Date(Date.UTC(y, m, 0)).getUTCDate()
+}
+
 export type DashboardRow = {
   id: string
   expert_name: string
@@ -28,14 +32,10 @@ function classifyFlag(actual: number, plans: { min: number; avg: number; max: nu
   if (plans.avg > 0 && actual >= plans.avg) return 'success'
   const expected = plans.avg > 0 ? plans.avg * (dayOfMonth / daysInMonth) : 0
   if (expected === 0) return 'green'
-  const pct = actual / expected
-  if (pct >= 0.85) return 'green'
-  if (pct >= 0.7) return 'yellow'
+  const ratio = actual / expected
+  if (ratio >= 0.85) return 'green'
+  if (ratio >= 0.7) return 'yellow'
   return 'red'
-}
-
-function daysInMonth(y: number, m: number): number {
-  return new Date(Date.UTC(y, m, 0)).getUTCDate()
 }
 
 export async function listDashboard(): Promise<DashboardRow[]> {
@@ -77,32 +77,30 @@ export async function listDashboard(): Promise<DashboardRow[]> {
     })
   }
 
-  // Считаем фактическую выручку из funnel_sales за текущий месяц
+  // Считаем факт через funnel_daily_journal
   const trackerIds = [...trackerByProject.values()].map((t) => t.id)
-  const salesByTracker = new Map<string, number>()
+  const factByTracker = new Map<string, number>()
   if (trackerIds.length > 0) {
-    const { data: funnels } = await supabase
-      .from('funnels')
-      .select('id, tracker_id')
-      .in('tracker_id', trackerIds)
+    const { data: funnels } = await supabase.from('funnels').select('id, tracker_id').in('tracker_id', trackerIds)
     const tByFunnel = new Map<string, string>()
-    const funnelIds = ((funnels ?? []) as { id: string; tracker_id: string }[]).map((f) => {
+    const funnelIds: string[] = []
+    for (const f of (funnels ?? []) as { id: string; tracker_id: string }[]) {
       tByFunnel.set(f.id, f.tracker_id)
-      return f.id
-    })
+      funnelIds.push(f.id)
+    }
     if (funnelIds.length > 0) {
       const monthStart = `${year}-${String(month).padStart(2, '0')}-01`
       const monthEnd = `${year}-${String(month).padStart(2, '0')}-${String(daysInMonth(year, month)).padStart(2, '0')}`
-      const { data: sales } = await supabase
-        .from('funnel_sales')
-        .select('funnel_id, qty, unit_price, day_date')
+      const { data: rows } = await supabase
+        .from('funnel_daily_journal')
+        .select('funnel_id, revenue, day_date')
         .in('funnel_id', funnelIds)
         .gte('day_date', monthStart)
         .lte('day_date', monthEnd)
-      for (const s of (sales ?? []) as { funnel_id: string; qty: number; unit_price: number }[]) {
-        const tid = tByFunnel.get(s.funnel_id)
+      for (const r of (rows ?? []) as { funnel_id: string; revenue: number }[]) {
+        const tid = tByFunnel.get(r.funnel_id)
         if (!tid) continue
-        salesByTracker.set(tid, (salesByTracker.get(tid) ?? 0) + s.qty * Number(s.unit_price))
+        factByTracker.set(tid, (factByTracker.get(tid) ?? 0) + Number(r.revenue))
       }
     }
   }
@@ -113,7 +111,7 @@ export async function listDashboard(): Promise<DashboardRow[]> {
 
   return list.map<DashboardRow>((p) => {
     const t = trackerByProject.get(p.id)
-    const actual = t ? (salesByTracker.get(t.id) ?? 0) : 0
+    const actual = t ? (factByTracker.get(t.id) ?? 0) : 0
     const plans = { min: t?.min ?? 0, avg: t?.avg ?? 0, max: t?.max ?? 0 }
     return {
       id: p.id,

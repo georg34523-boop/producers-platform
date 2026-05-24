@@ -3,11 +3,7 @@ import { notFound } from 'next/navigation'
 import { getProject } from '@/lib/queries/projects'
 import { listProducts } from '@/lib/queries/products'
 import { listExpenses, listReturns } from '@/lib/queries/expenses'
-import {
-  getFunnels,
-  getOrCreateTracker,
-  nowYearMonth,
-} from '@/lib/queries/tracker'
+import { getFunnels, getOrCreateTracker, nowYearMonth } from '@/lib/queries/tracker'
 import { computeUnits, currentMonthRange } from '@/lib/units'
 
 import { UnitsView } from './units-view'
@@ -31,16 +27,14 @@ export default async function UnitsPage({
   ])
 
   const monthRange = currentMonthRange(year, month)
-  const allSales = funnels.flatMap((f) => f.sales)
   const units = computeUnits({
     project: { work_model: project.work_model, fix_amount: project.fix_amount },
     products,
-    sales: allSales,
     funnels: funnels.map((f) => ({
-      funnel_id: f.id,
+      id: f.id,
+      product_id: f.product_id,
       is_mini_product: f.is_mini_product,
-      revenue: f.sales.reduce((s, x) => s + Number(x.unit_price) * x.qty, 0),
-      traffic: f.traffic.reduce((s, x) => s + Number(x.amount), 0),
+      journal: f.journal,
     })),
     expenses,
     returns,
@@ -49,13 +43,6 @@ export default async function UnitsPage({
   })
 
   return (
-    <UnitsView
-      projectId={id}
-      project={project}
-      products={products}
-      units={units}
-      expenses={expenses}
-      returns={returns}
-    />
+    <UnitsView projectId={id} project={project} products={products} units={units} expenses={expenses} returns={returns} />
   )
 }

@@ -3,7 +3,6 @@ import type {
   ExpenseRecurrence,
   LaunchStatus,
   ProjectStatus,
-  StageKind,
   UserRole,
   WorkModel,
 } from '@/lib/supabase/types'
@@ -42,12 +41,6 @@ export const EXPENSE_KIND_LABEL: Record<ExpenseKind, string> = {
 export const EXPENSE_RECURRENCE_LABEL: Record<ExpenseRecurrence, string> = {
   monthly: 'Ежемесячный',
   one_off: 'Разовый',
-}
-
-export const STAGE_KIND_LABEL: Record<StageKind, string> = {
-  application: 'Анкета',
-  intermediate: 'Промежуточный',
-  payment: 'Оплаты',
 }
 
 export const MONTH_LABEL_RU: Record<number, string> = {
