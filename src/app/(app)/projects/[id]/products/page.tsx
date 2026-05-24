@@ -1,5 +1,10 @@
 import { listProducts } from '@/lib/queries/products'
-import { getFunnels, getOrCreateTracker, nowYearMonth } from '@/lib/queries/tracker'
+import {
+  funnelSemanticTotals,
+  getFunnels,
+  getOrCreateTracker,
+  nowYearMonth,
+} from '@/lib/queries/tracker'
 
 import { ProductsView } from './products-view'
 
@@ -14,15 +19,14 @@ export default async function ProductsPage({
   const tracker = await getOrCreateTracker(id, year, month)
   const funnels = await getFunnels(tracker.id)
 
-  // Аггрегируем выручку и кол-во продаж по продукту через привязку воронка→продукт
+  // Аггрегируем выручку и кол-во продаж через привязку воронка→продукт
   const byProduct = new Map<string, { qty: number; revenue: number }>()
   for (const f of funnels) {
     if (f.is_mini_product || !f.product_id) continue
+    const t = funnelSemanticTotals(f)
     const cur = byProduct.get(f.product_id) ?? { qty: 0, revenue: 0 }
-    for (const r of f.journal) {
-      cur.qty += r.sales_count
-      cur.revenue += Number(r.revenue)
-    }
+    cur.qty += t.sales
+    cur.revenue += t.revenue
     byProduct.set(f.product_id, cur)
   }
 

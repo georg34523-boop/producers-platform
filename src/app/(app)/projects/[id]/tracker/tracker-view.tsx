@@ -20,9 +20,11 @@ import { Textarea } from '@/components/ui/textarea'
 import { LAUNCH_STATUS_LABEL, MONTH_LABEL_RU } from '@/lib/labels'
 import type {
   Funnel,
-  FunnelDailyJournal,
+  FunnelDailyLog,
+  FunnelMetric,
   FunnelMiniPrice,
   LaunchStatus,
+  MetricRole,
   MonthlyTracker,
   Product,
   TrackerWeeklyPlan,
@@ -30,21 +32,24 @@ import type {
 import { cn } from '@/lib/utils'
 
 import {
+  addMetric,
   addMiniPrice,
   createFunnel,
   deleteFunnel,
-  deleteJournalRow,
+  deleteLogRow,
+  deleteMetric,
   deleteMiniPrice,
   setWeeklyPlan,
   updateFunnel,
-  updateJournalField,
+  updateMetric,
   updateTrackerField,
-  upsertJournalRow,
+  upsertDailyLog,
 } from './actions'
 
 type FullFunnel = Funnel & {
   mini_prices: FunnelMiniPrice[]
-  journal: FunnelDailyJournal[]
+  metrics: FunnelMetric[]
+  log: FunnelDailyLog[]
 }
 
 // Утилиты ----------------------------------------------------
@@ -71,12 +76,19 @@ function weeksOfMonth(y: number, m: number) {
   }
   return w
 }
-function ru(date: string): string {
-  return new Date(date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })
-}
 function dayOfWeek(date: string): string {
-  const days = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
-  return days[new Date(date + 'T00:00:00Z').getUTCDay()]!
+  return ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'][new Date(date + 'T00:00:00Z').getUTCDay()]!
+}
+function metricByRole(metrics: FunnelMetric[], role: MetricRole): FunnelMetric | null {
+  return metrics.find((m) => m.role === role) ?? null
+}
+function sumMetric(log: FunnelDailyLog[], key: string): number {
+  let s = 0
+  for (const r of log) {
+    const v = r.values?.[key]
+    if (typeof v === 'number' && Number.isFinite(v)) s += v
+  }
+  return s
 }
 
 // Орхестратор ------------------------------------------------
@@ -97,9 +109,7 @@ export function TrackerView({
     <div className="space-y-6">
       <MonthSwitcher projectId={projectId} tracker={tracker} />
       <BlockA projectId={projectId} tracker={tracker} weeklyPlans={weeklyPlans} funnels={funnels} />
-      <BlockB projectId={projectId} tracker={tracker} funnels={funnels} products={products} />
-      <Journal projectId={projectId} tracker={tracker} funnels={funnels} />
-      <BlockC projectId={projectId} tracker={tracker} funnels={funnels} />
+      <FunnelsSection projectId={projectId} tracker={tracker} funnels={funnels} products={products} />
       <BlockD projectId={projectId} tracker={tracker} />
     </div>
   )
@@ -129,7 +139,7 @@ function MonthSwitcher({ projectId, tracker }: { projectId: string; tracker: Mon
   )
 }
 
-// Блок A: цели + cash flow по неделям -----------------------
+// Блок A: цели + cash flow ----------------------------------
 function BlockA({
   projectId,
   tracker,
@@ -144,43 +154,47 @@ function BlockA({
   const weeks = weeksOfMonth(tracker.year, tracker.month)
   const planByWeek = new Map(weeklyPlans.map((p) => [p.week_index, Number(p.revenue_plan)]))
 
-  const allRows = funnels.flatMap((f) => f.journal)
-  const totalFact = allRows.reduce((s, r) => s + Number(r.revenue), 0)
+  // Считаем выручку по дням из роли 'revenue'
+  type DayRev = { day_date: string; revenue: number }
+  const allRev: DayRev[] = []
+  for (const f of funnels) {
+    const m = metricByRole(f.metrics, 'revenue')
+    if (!m) continue
+    for (const row of f.log) {
+      const v = row.values?.[m.key]
+      if (typeof v === 'number' && Number.isFinite(v)) allRev.push({ day_date: row.day_date, revenue: v })
+    }
+  }
+  const totalFact = allRev.reduce((s, r) => s + r.revenue, 0)
   const factByWeek = new Map<number, number>()
-  for (const r of allRows) {
+  for (const r of allRev) {
     const day = new Date(r.day_date + 'T00:00:00Z').getUTCDate()
     const wk = weeks.find((w) => day >= w.start && day <= w.end)
     if (!wk) continue
-    factByWeek.set(wk.idx, (factByWeek.get(wk.idx) ?? 0) + Number(r.revenue))
+    factByWeek.set(wk.idx, (factByWeek.get(wk.idx) ?? 0) + r.revenue)
   }
-
   const remaining = Math.max(0, Number(tracker.revenue_plan_avg) - totalFact)
-  const pct = Number(tracker.revenue_plan_avg) > 0
-    ? Math.round((totalFact / Number(tracker.revenue_plan_avg)) * 100)
-    : 0
+  const pct = Number(tracker.revenue_plan_avg) > 0 ? Math.round((totalFact / Number(tracker.revenue_plan_avg)) * 100) : 0
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">A. Цели и cash flow</CardTitle>
+        <CardTitle className="text-base">Позиція до плану</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Позиция к плану */}
         <div className="grid gap-3 sm:grid-cols-4">
-          <Stat title="Цель (средняя)" value={fmt(Number(tracker.revenue_plan_avg))} />
-          <Stat title="Факт месяца" value={fmt(totalFact)} highlight />
+          <Stat title="Ціль (середня)" value={fmt(Number(tracker.revenue_plan_avg))} />
+          <Stat title="Факт місяця" value={fmt(totalFact)} highlight />
           <Stat title="% виконання" value={`${pct}%`} />
           <Stat title="Залишилось" value={fmt(remaining)} />
         </div>
 
-        {/* Планы */}
         <div className="grid gap-3 sm:grid-cols-3">
           <PlanField label="Мінімум" trackerId={tracker.id} projectId={projectId} field="revenue_plan_min" defaultValue={Number(tracker.revenue_plan_min)} />
           <PlanField label="Середній" trackerId={tracker.id} projectId={projectId} field="revenue_plan_avg" defaultValue={Number(tracker.revenue_plan_avg)} />
           <PlanField label="Максимум" trackerId={tracker.id} projectId={projectId} field="revenue_plan_max" defaultValue={Number(tracker.revenue_plan_max)} />
         </div>
 
-        {/* Cash flow по тижнях */}
         <div>
           <div className="mb-2 text-xs text-muted-foreground">Cash flow по тижнях</div>
           <div className="overflow-hidden rounded-md border">
@@ -204,7 +218,7 @@ function BlockA({
                   return (
                     <tr key={w.idx} className="hover:bg-muted/20">
                       <td className="px-3 py-2">
-                        Неділя {w.idx} ({w.start}–{w.end})
+                        Тиждень {w.idx} ({w.start}–{w.end})
                       </td>
                       <td className="px-3 py-2 text-right">
                         <WeeklyPlanInput trackerId={tracker.id} projectId={projectId} weekIndex={w.idx} defaultValue={plan} />
@@ -281,7 +295,7 @@ function WeeklyPlanInput({
       step="any"
       defaultValue={defaultValue || ''}
       placeholder="0"
-      className="h-7 ml-auto max-w-[120px] text-right text-sm"
+      className="ml-auto h-7 max-w-[120px] text-right text-sm"
       onBlur={(e) => {
         const v = Number(e.target.value)
         if (Number.isFinite(v) && v !== defaultValue) startTransition(() => setWeeklyPlan(trackerId, projectId, weekIndex, v))
@@ -290,8 +304,8 @@ function WeeklyPlanInput({
   )
 }
 
-// Блок B: воронки -------------------------------------------
-function BlockB({
+// Воронки: табы + детальная панель ---------------------------
+function FunnelsSection({
   projectId,
   tracker,
   funnels,
@@ -302,24 +316,45 @@ function BlockB({
   funnels: FullFunnel[]
   products: Product[]
 }) {
+  const [selectedId, setSelectedId] = useState<string | null>(funnels[0]?.id ?? null)
   const [newOpen, setNewOpen] = useState(false)
+  const selected = funnels.find((f) => f.id === selectedId) ?? funnels[0] ?? null
+
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0">
-        <CardTitle className="text-base">B. Воронки</CardTitle>
-        <Button size="sm" variant="outline" onClick={() => setNewOpen(true)}>
-          <Plus className="mr-1 h-3.5 w-3.5" />
-          Воронка
-        </Button>
+      <CardHeader>
+        <CardTitle className="text-base">Воронки</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {funnels.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Воронок ще немає. Додай — наприклад «Вебінарна», «Автовеб», «Прямі продажі».</p>
+        <div className="flex flex-wrap items-center gap-1 border-b pb-2">
+          {funnels.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setSelectedId(f.id)}
+              className={cn(
+                'rounded-md border px-3 py-1.5 text-sm transition-colors',
+                selected?.id === f.id ? 'border-foreground bg-muted' : 'border-transparent text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {f.name}
+              {f.is_mini_product ? <span className="ml-1 text-[10px] text-muted-foreground">(мини)</span> : null}
+            </button>
+          ))}
+          <Button size="sm" variant="outline" onClick={() => setNewOpen(true)} className="ml-2">
+            <Plus className="mr-1 h-3.5 w-3.5" />
+            Воронка
+          </Button>
+        </div>
+
+        {selected ? (
+          <FunnelDetail funnel={selected} projectId={projectId} products={products} year={tracker.year} month={tracker.month} />
         ) : (
-          funnels.map((f) => <FunnelCard key={f.id} funnel={f} projectId={projectId} products={products} />)
+          <p className="py-12 text-center text-sm text-muted-foreground">Додай першу воронку — наприклад «Автовеб», «Живий веб», «Діагностика».</p>
         )}
       </CardContent>
-      <NewFunnelDialog trackerId={tracker.id} projectId={projectId} products={products} open={newOpen} onOpenChange={setNewOpen} />
+
+      <NewFunnelDialog trackerId={tracker.id} projectId={projectId} products={products} open={newOpen} onOpenChange={setNewOpen} onCreated={setSelectedId} />
     </Card>
   )
 }
@@ -330,20 +365,19 @@ function NewFunnelDialog({
   products,
   open,
   onOpenChange,
+  onCreated,
 }: {
   trackerId: string
   projectId: string
   products: Product[]
   open: boolean
   onOpenChange: (o: boolean) => void
+  onCreated: (id: string) => void
 }) {
   const [, startTransition] = useTransition()
   const [name, setName] = useState('')
   const [isMini, setIsMini] = useState(false)
   const [productId, setProductId] = useState('')
-  const [appPlan, setAppPlan] = useState('')
-  const [salesPlan, setSalesPlan] = useState('')
-  const [revPlan, setRevPlan] = useState('')
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -370,48 +404,36 @@ function NewFunnelDialog({
               >
                 <option value="">— не привʼязано —</option>
                 {products.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
                 ))}
               </select>
             </div>
           ) : null}
-          <div className="grid grid-cols-3 gap-2">
-            <div className="space-y-1">
-              <Label className="text-xs">План анкет</Label>
-              <Input type="number" min={0} value={appPlan} onChange={(e) => setAppPlan(e.target.value)} />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">План продажів</Label>
-              <Input type="number" min={0} value={salesPlan} onChange={(e) => setSalesPlan(e.target.value)} />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">План виручки $</Label>
-              <Input type="number" min={0} step="any" value={revPlan} onChange={(e) => setRevPlan(e.target.value)} />
-            </div>
-          </div>
+          <p className="text-xs text-muted-foreground">
+            Стандартні метрики (Анкети / Продажі / Виручка) додадуться автоматично. Налаштування і додавання метрик — після створення.
+          </p>
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>Відміна</Button>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Відміна
+          </Button>
           <Button
             disabled={!name.trim()}
             onClick={() =>
               startTransition(async () => {
-                await createFunnel({
+                const id = await createFunnel({
                   tracker_id: trackerId,
                   project_id: projectId,
                   name: name.trim(),
                   is_mini_product: isMini,
                   product_id: productId || null,
-                  applications_plan: Number(appPlan) || 0,
-                  sales_plan: Number(salesPlan) || 0,
-                  revenue_plan: Number(revPlan) || 0,
                 })
+                if (id) onCreated(id)
                 setName('')
                 setIsMini(false)
                 setProductId('')
-                setAppPlan('')
-                setSalesPlan('')
-                setRevPlan('')
                 onOpenChange(false)
               })
             }
@@ -424,157 +446,99 @@ function NewFunnelDialog({
   )
 }
 
-function FunnelCard({
+function FunnelDetail({
   funnel,
   projectId,
   products,
+  year,
+  month,
 }: {
   funnel: FullFunnel
   projectId: string
   products: Product[]
+  year: number
+  month: number
 }) {
-  const [, startTransition] = useTransition()
-  const [editOpen, setEditOpen] = useState(false)
-
-  const applications = funnel.journal.reduce((s, r) => s + r.applications, 0)
-  const sales = funnel.journal.reduce((s, r) => s + r.sales_count, 0)
-  const revenue = funnel.journal.reduce((s, r) => s + Number(r.revenue), 0)
-  const traffic = funnel.journal.reduce((s, r) => s + Number(r.traffic_spend), 0)
-  const appsPct = funnel.applications_plan > 0 ? Math.round((applications / funnel.applications_plan) * 100) : 0
-  const salesPct = funnel.sales_plan > 0 ? Math.round((sales / funnel.sales_plan) * 100) : 0
-  const revPct = funnel.revenue_plan > 0 ? Math.round((revenue / Number(funnel.revenue_plan)) * 100) : 0
-  const convFact = applications > 0 ? Math.round((sales / applications) * 1000) / 10 : 0
-  const convPlan = funnel.applications_plan > 0 ? Math.round((funnel.sales_plan / funnel.applications_plan) * 1000) / 10 : 0
-  const product = products.find((p) => p.id === funnel.product_id)
-
   return (
-    <div className="rounded-md border bg-card/40 p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">{funnel.name}</span>
-          {funnel.is_mini_product ? (
-            <Badge variant="secondary">Мини-продукт</Badge>
-          ) : product ? (
-            <Badge variant="secondary">→ {product.name}</Badge>
-          ) : (
-            <Badge variant="secondary">→ не привʼязано</Badge>
-          )}
-        </div>
-        <div className="flex shrink-0 gap-1">
-          <Button size="sm" variant="ghost" onClick={() => setEditOpen(true)}>Налаштування</Button>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            onClick={() => {
-              if (confirm('Видалити воронку?')) startTransition(() => deleteFunnel(funnel.id, projectId))
-            }}
-          >
-            <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
-          </Button>
-        </div>
-      </div>
-
-      <div className="grid gap-2 sm:grid-cols-4">
-        <MiniMetric label="Анкети" plan={funnel.applications_plan} fact={applications} pct={appsPct} />
-        <MiniMetric label="Продажі" plan={funnel.sales_plan} fact={sales} pct={salesPct} />
-        <MiniMetric label="Виручка, $" plan={Number(funnel.revenue_plan)} fact={Math.round(revenue)} pct={revPct} />
-        <div className="rounded-md border bg-background p-2 text-xs">
-          <div className="text-muted-foreground">Конверсія</div>
-          <div className="mt-1">
-            <strong>{convFact}%</strong> / {convPlan}%
-          </div>
-          {traffic > 0 ? <div className="mt-1 text-[10px] text-muted-foreground">Трафік: {fmt(traffic)}</div> : null}
-        </div>
-      </div>
-
-      <FunnelEditDialog funnel={funnel} projectId={projectId} products={products} open={editOpen} onOpenChange={setEditOpen} />
+    <div className="space-y-5">
+      <FunnelSettings funnel={funnel} projectId={projectId} products={products} />
+      <FunnelMetrics funnel={funnel} projectId={projectId} />
+      <FunnelLog funnel={funnel} projectId={projectId} year={year} month={month} />
     </div>
   )
 }
 
-function MiniMetric({ label, plan, fact, pct }: { label: string; plan: number; fact: number; pct: number }) {
-  return (
-    <div className="rounded-md border bg-background p-2 text-xs">
-      <div className="text-muted-foreground">{label}</div>
-      <div className="mt-1">
-        <strong>{fmt(fact)}</strong>
-        <span className="text-muted-foreground"> / {fmt(plan)}</span>
-      </div>
-      {plan > 0 ? (
-        <div className="mt-1 h-1 overflow-hidden rounded bg-muted">
-          <div
-            className={cn('h-full', pct >= 100 ? 'bg-emerald-500' : pct >= 70 ? 'bg-foreground/70' : 'bg-red-500')}
-            style={{ width: `${Math.min(100, pct)}%` }}
-          />
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-function FunnelEditDialog({
+function FunnelSettings({
   funnel,
   projectId,
   products,
-  open,
-  onOpenChange,
 }: {
   funnel: FullFunnel
   projectId: string
   products: Product[]
-  open: boolean
-  onOpenChange: (o: boolean) => void
 }) {
   const [, startTransition] = useTransition()
   const [newPriceName, setNewPriceName] = useState('')
   const [newPriceVal, setNewPriceVal] = useState('')
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>{funnel.name}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <Label className="text-xs">Назва</Label>
-            <Input
-              defaultValue={funnel.name}
-              onBlur={(e) => {
-                const v = e.target.value.trim()
-                if (v && v !== funnel.name) startTransition(() => updateFunnel(funnel.id, projectId, { name: v }))
-              }}
-            />
-          </div>
-          <label className="flex items-center gap-2 text-sm">
+    <div className="space-y-3 rounded-md border bg-card/40 p-3">
+      <div className="grid gap-3 sm:grid-cols-[1fr_auto_1fr]">
+        <div className="space-y-1">
+          <Label className="text-xs">Назва</Label>
+          <Input
+            defaultValue={funnel.name}
+            onBlur={(e) => {
+              const v = e.target.value.trim()
+              if (v && v !== funnel.name) startTransition(() => updateFunnel(funnel.id, projectId, { name: v }))
+            }}
+          />
+        </div>
+        <div className="flex items-end gap-3">
+          <label className="flex items-center gap-2 pb-2 text-sm">
             <input
               type="checkbox"
               defaultChecked={funnel.is_mini_product}
-              onChange={(e) =>
-                startTransition(() => updateFunnel(funnel.id, projectId, { is_mini_product: e.target.checked }))
-              }
+              onChange={(e) => startTransition(() => updateFunnel(funnel.id, projectId, { is_mini_product: e.target.checked }))}
             />
             Мини-продукт
           </label>
-          {!funnel.is_mini_product ? (
-            <div className="space-y-1">
-              <Label className="text-xs">Продукт</Label>
-              <select
-                defaultValue={funnel.product_id ?? ''}
-                onChange={(e) => startTransition(() => updateFunnel(funnel.id, projectId, { product_id: e.target.value || null }))}
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-              >
-                <option value="">— не привʼязано —</option>
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </div>
-          ) : (
-            <div className="space-y-2 rounded-md border bg-muted/30 p-2">
-              <Label className="text-xs">Ціни мини-продукту</Label>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-destructive hover:text-destructive"
+            onClick={() => {
+              if (confirm(`Видалити воронку «${funnel.name}» зі всіма даними?`)) {
+                startTransition(() => deleteFunnel(funnel.id, projectId))
+              }
+            }}
+          >
+            <Trash2 className="mr-1 h-3.5 w-3.5" />
+            Видалити воронку
+          </Button>
+        </div>
+        {!funnel.is_mini_product ? (
+          <div className="space-y-1">
+            <Label className="text-xs">Продукт</Label>
+            <select
+              defaultValue={funnel.product_id ?? ''}
+              onChange={(e) => startTransition(() => updateFunnel(funnel.id, projectId, { product_id: e.target.value || null }))}
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="">— не привʼязано —</option>
+              {products.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <div className="space-y-1">
+            <Label className="text-xs">Ціни мини-продукту</Label>
+            <div className="space-y-1 rounded-md border bg-background p-2">
               {funnel.mini_prices.length === 0 ? (
-                <p className="text-xs text-muted-foreground">Поки немає тарифів. Додай нижче.</p>
+                <p className="text-xs text-muted-foreground">Поки немає тарифів</p>
               ) : (
                 <ul className="space-y-1">
                   {funnel.mini_prices.map((p) => (
@@ -592,14 +556,14 @@ function FunnelEditDialog({
                   ))}
                 </ul>
               )}
-              <div className="grid grid-cols-[1fr_100px_auto] gap-1">
-                <Input value={newPriceName} onChange={(e) => setNewPriceName(e.target.value)} placeholder="Тариф" className="h-8" />
+              <div className="mt-1 grid grid-cols-[1fr_90px_auto] gap-1">
+                <Input value={newPriceName} onChange={(e) => setNewPriceName(e.target.value)} placeholder="Тариф" className="h-7 text-xs" />
                 <Input
                   type="number"
                   value={newPriceVal}
                   onChange={(e) => setNewPriceVal(e.target.value)}
                   placeholder="$"
-                  className="h-8"
+                  className="h-7 text-xs"
                 />
                 <Button
                   size="sm"
@@ -616,210 +580,438 @@ function FunnelEditDialog({
                 </Button>
               </div>
             </div>
-          )}
-          <div className="grid grid-cols-3 gap-2">
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Метрики ----------------------------------------------------
+const ROLE_LABEL: Record<MetricRole, string> = {
+  revenue: 'Виручка',
+  sales: 'Продажі',
+  applications: 'Анкети',
+  traffic_spend: 'Трафік',
+  other: 'Інше',
+}
+
+const QUICK_METRICS: { key: string; label: string; role: MetricRole; unit: string }[] = [
+  { key: 'budget', label: 'Бюджет', role: 'traffic_spend', unit: '$' },
+  { key: 'clicks', label: 'Кліки', role: 'other', unit: 'шт' },
+  { key: 'impressions', label: 'Покази', role: 'other', unit: 'шт' },
+  { key: 'leads', label: 'Ліди', role: 'other', unit: 'шт' },
+  { key: 'op_calls', label: 'Дзвінки ОП', role: 'other', unit: 'шт' },
+  { key: 'expert_calls', label: 'Дзвінки експерта', role: 'other', unit: 'шт' },
+]
+
+function FunnelMetrics({ funnel, projectId }: { funnel: FullFunnel; projectId: string }) {
+  const [, startTransition] = useTransition()
+  const [addOpen, setAddOpen] = useState(false)
+
+  const existingKeys = new Set(funnel.metrics.map((m) => m.key))
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-medium">Метрики воронки</div>
+        <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
+          <Plus className="mr-1 h-3.5 w-3.5" />
+          Додати метрику
+        </Button>
+      </div>
+
+      {funnel.metrics.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          Поки немає метрик. Додай хоча б Анкети / Продажі / Виручку.
+        </p>
+      ) : (
+        <div className="overflow-hidden rounded-md border">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+              <tr>
+                <th className="px-3 py-2 text-left">Назва</th>
+                <th className="px-3 py-2 text-left">Роль</th>
+                <th className="px-3 py-2 text-left">Од.</th>
+                <th className="px-3 py-2 text-right">План</th>
+                <th className="px-3 py-2 text-right">Факт</th>
+                <th className="px-3 py-2 text-right">%</th>
+                <th className="px-3 py-2"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {funnel.metrics.map((m) => {
+                const fact = sumMetric(funnel.log, m.key)
+                const pct = m.plan_value > 0 ? Math.round((fact / Number(m.plan_value)) * 100) : 0
+                return (
+                  <tr key={m.id} className="hover:bg-muted/10">
+                    <td className="px-3 py-1.5">
+                      <Input
+                        defaultValue={m.label}
+                        className="h-7 text-sm"
+                        onBlur={(e) => {
+                          const v = e.target.value.trim()
+                          if (v && v !== m.label) startTransition(() => updateMetric(m.id, projectId, { label: v }))
+                        }}
+                      />
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <select
+                        defaultValue={m.role}
+                        onChange={(e) =>
+                          startTransition(() => updateMetric(m.id, projectId, { role: e.target.value as MetricRole }))
+                        }
+                        className="h-7 rounded-md border border-input bg-background px-2 text-xs"
+                      >
+                        {(['revenue', 'sales', 'applications', 'traffic_spend', 'other'] as MetricRole[]).map((r) => (
+                          <option key={r} value={r}>
+                            {ROLE_LABEL[r]}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <Input
+                        defaultValue={m.unit ?? ''}
+                        className="h-7 w-16 text-sm"
+                        placeholder="—"
+                        onBlur={(e) => {
+                          const v = e.target.value.trim()
+                          if (v !== (m.unit ?? '')) startTransition(() => updateMetric(m.id, projectId, { unit: v || null }))
+                        }}
+                      />
+                    </td>
+                    <td className="px-3 py-1.5 text-right">
+                      <Input
+                        type="number"
+                        step="any"
+                        defaultValue={Number(m.plan_value) || ''}
+                        className="ml-auto h-7 w-28 text-right text-sm"
+                        onBlur={(e) => {
+                          const v = Number(e.target.value) || 0
+                          if (v !== Number(m.plan_value)) startTransition(() => updateMetric(m.id, projectId, { plan_value: v }))
+                        }}
+                      />
+                    </td>
+                    <td className="px-3 py-1.5 text-right font-medium">{fmt(fact)}</td>
+                    <td className="px-3 py-1.5 text-right text-xs text-muted-foreground">
+                      {m.plan_value > 0 ? `${pct}%` : '—'}
+                    </td>
+                    <td className="px-3 py-1.5 text-right">
+                      <button
+                        type="button"
+                        className="text-muted-foreground hover:text-destructive"
+                        onClick={() => {
+                          if (confirm(`Видалити метрику «${m.label}»? Видаляться і її дневні значення.`))
+                            startTransition(() => deleteMetric(m.id, projectId))
+                        }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-1 pt-1">
+        <span className="self-center text-xs text-muted-foreground">Швидке додавання:</span>
+        {QUICK_METRICS.filter((q) => !existingKeys.has(q.key)).map((q) => (
+          <Button
+            key={q.key}
+            size="xs"
+            variant="ghost"
+            onClick={() =>
+              startTransition(() => {
+                void addMetric({
+                  funnel_id: funnel.id,
+                  project_id: projectId,
+                  key: q.key,
+                  label: q.label,
+                  role: q.role,
+                  unit: q.unit,
+                  plan_value: 0,
+                })
+              })
+            }
+          >
+            + {q.label}
+          </Button>
+        ))}
+      </div>
+
+      <AddMetricDialog funnelId={funnel.id} projectId={projectId} open={addOpen} onOpenChange={setAddOpen} existingKeys={existingKeys} />
+    </div>
+  )
+}
+
+function AddMetricDialog({
+  funnelId,
+  projectId,
+  open,
+  onOpenChange,
+  existingKeys,
+}: {
+  funnelId: string
+  projectId: string
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  existingKeys: Set<string>
+}) {
+  const [, startTransition] = useTransition()
+  const [label, setLabel] = useState('')
+  const [key, setKey] = useState('')
+  const [role, setRole] = useState<MetricRole>('other')
+  const [unit, setUnit] = useState('')
+  const [plan, setPlan] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+
+  function autoKey(lbl: string) {
+    return lbl
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 40) || 'metric'
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Нова метрика</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label className="text-xs">Назва</Label>
+            <Input
+              value={label}
+              onChange={(e) => {
+                setLabel(e.target.value)
+                if (!key) setKey(autoKey(e.target.value))
+              }}
+              placeholder="Наприклад: Перегляди, Прогрії, Бронювання…"
+              autoFocus
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <Label className="text-xs">План анкет</Label>
-              <Input
-                type="number"
-                min={0}
-                defaultValue={funnel.applications_plan}
-                onBlur={(e) =>
-                  startTransition(() => updateFunnel(funnel.id, projectId, { applications_plan: Number(e.target.value) || 0 }))
-                }
-              />
+              <Label className="text-xs">Ключ (латиницею)</Label>
+              <Input value={key} onChange={(e) => setKey(e.target.value.toLowerCase())} placeholder="custom_metric" />
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">План продажів</Label>
-              <Input
-                type="number"
-                min={0}
-                defaultValue={funnel.sales_plan}
-                onBlur={(e) => startTransition(() => updateFunnel(funnel.id, projectId, { sales_plan: Number(e.target.value) || 0 }))}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">План виручки $</Label>
-              <Input
-                type="number"
-                min={0}
-                step="any"
-                defaultValue={Number(funnel.revenue_plan)}
-                onBlur={(e) =>
-                  startTransition(() => updateFunnel(funnel.id, projectId, { revenue_plan: Number(e.target.value) || 0 }))
-                }
-              />
+              <Label className="text-xs">Од. виміру</Label>
+              <Input value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="$ / шт / %" />
             </div>
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Роль (для агрегатів)</Label>
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value as MetricRole)}
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+              >
+                {(['other', 'revenue', 'sales', 'applications', 'traffic_spend'] as MetricRole[]).map((r) => (
+                  <option key={r} value={r}>
+                    {ROLE_LABEL[r]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">План</Label>
+              <Input type="number" step="any" value={plan} onChange={(e) => setPlan(e.target.value)} />
+            </div>
+          </div>
+          {err ? <p className="text-xs text-destructive">{err}</p> : null}
         </div>
         <DialogFooter>
-          <Button onClick={() => onOpenChange(false)}>Готово</Button>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Відміна
+          </Button>
+          <Button
+            disabled={!label.trim() || !key.trim()}
+            onClick={() => {
+              if (existingKeys.has(key)) {
+                setErr(`Ключ «${key}» вже є в цій воронці`)
+                return
+              }
+              startTransition(async () => {
+                const res = await addMetric({
+                  funnel_id: funnelId,
+                  project_id: projectId,
+                  key: key.trim(),
+                  label: label.trim(),
+                  role,
+                  unit: unit.trim() || undefined,
+                  plan_value: Number(plan) || 0,
+                })
+                if (res?.error) {
+                  setErr(res.error)
+                } else {
+                  setLabel('')
+                  setKey('')
+                  setUnit('')
+                  setPlan('')
+                  setRole('other')
+                  setErr(null)
+                  onOpenChange(false)
+                }
+              })
+            }}
+          >
+            Додати
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   )
 }
 
-// Журнал лідів і продажів ----------------------------------
-function Journal({
+// Дневной лог -----------------------------------------------
+function FunnelLog({
+  funnel,
   projectId,
-  tracker,
-  funnels,
+  year,
+  month,
 }: {
+  funnel: FullFunnel
   projectId: string
-  tracker: MonthlyTracker
-  funnels: FullFunnel[]
+  year: number
+  month: number
 }) {
   const [, startTransition] = useTransition()
+  const metrics = funnel.metrics
 
-  // Список существующих строк + быстрая «новая строка»
-  const allRows = useMemo(() => {
-    const rows: (FunnelDailyJournal & { funnel_name: string; funnel_id: string })[] = []
-    for (const f of funnels) {
-      for (const r of f.journal) rows.push({ ...r, funnel_name: f.name, funnel_id: f.id })
-    }
-    return rows.sort((a, b) => a.day_date.localeCompare(b.day_date))
-  }, [funnels])
-
-  // Состояние для новой строки
-  const [draft, setDraft] = useState({
-    day_date: dayIso(tracker.year, tracker.month, new Date().getUTCDate()),
-    funnel_id: funnels[0]?.id ?? '',
-    applications: '',
-    op_calls: '',
-    sales_count: '',
-    revenue: '',
-    traffic_spend: '',
-    comment: '',
-  })
+  const draftInit = useMemo(
+    () => ({
+      day: dayIso(year, month, new Date().getUTCDate()),
+      values: Object.fromEntries(metrics.map((m) => [m.key, ''])) as Record<string, string>,
+      comment: '',
+    }),
+    [metrics, year, month],
+  )
+  const [draft, setDraft] = useState(draftInit)
 
   const submitDraft = () => {
-    if (!draft.funnel_id) return
+    if (metrics.length === 0) return
+    const vals: Record<string, number> = {}
+    for (const m of metrics) {
+      const v = Number(draft.values[m.key])
+      if (Number.isFinite(v) && v !== 0) vals[m.key] = v
+    }
     startTransition(async () => {
-      await upsertJournalRow({
-        funnel_id: draft.funnel_id,
-        project_id: projectId,
-        day_date: draft.day_date,
-        applications: Number(draft.applications) || 0,
-        op_calls: Number(draft.op_calls) || 0,
-        sales_count: Number(draft.sales_count) || 0,
-        revenue: Number(draft.revenue) || 0,
-        traffic_spend: Number(draft.traffic_spend) || 0,
-        comment: draft.comment,
-      })
-      setDraft((s) => ({ ...s, applications: '', op_calls: '', sales_count: '', revenue: '', traffic_spend: '', comment: '' }))
+      await upsertDailyLog(funnel.id, projectId, draft.day, vals, draft.comment || null)
+      setDraft({ ...draftInit })
     })
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Щоденний журнал лідів і продажів</CardTitle>
-        <p className="text-xs text-muted-foreground">Заповнюй щодня. Один рядок = підсумок дня по одному джерелу.</p>
-      </CardHeader>
-      <CardContent className="p-0">
-        {funnels.length === 0 ? (
-          <p className="px-6 pb-6 text-sm text-muted-foreground">Спочатку додай хоча б одну воронку у блоці B.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
-                <tr>
-                  <th className="px-2 py-2 text-left">Дата</th>
-                  <th className="px-2 py-2 text-left">День</th>
-                  <th className="px-2 py-2 text-left">Джерело</th>
-                  <th className="px-2 py-2 text-right">Анкет</th>
-                  <th className="px-2 py-2 text-right">Дзв. ОП</th>
-                  <th className="px-2 py-2 text-right">Продажів</th>
-                  <th className="px-2 py-2 text-right">Виручка $</th>
-                  <th className="px-2 py-2 text-right">Витрати $</th>
-                  <th className="px-2 py-2 text-left">Коментар</th>
-                  <th className="px-2 py-2"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {allRows.map((r) => (
-                  <JournalRow key={r.id} row={r} projectId={projectId} />
+    <div className="space-y-2">
+      <div className="text-sm font-medium">Щоденний журнал</div>
+      {metrics.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Додай метрики вище — і тут зʼявиться журнал.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-md border">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+              <tr>
+                <th className="px-2 py-2 text-left">Дата</th>
+                <th className="px-2 py-2 text-left">День</th>
+                {metrics.map((m) => (
+                  <th key={m.id} className="px-2 py-2 text-right">
+                    {m.label}
+                    {m.unit ? <span className="ml-1 text-[10px] text-muted-foreground">({m.unit})</span> : null}
+                  </th>
                 ))}
-
-                {/* Новая строка */}
-                <tr className="bg-muted/20">
-                  <td className="px-2 py-1">
+                <th className="px-2 py-2 text-left">Коментар</th>
+                <th className="px-2 py-2"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {funnel.log.map((row) => (
+                <LogRow key={row.id} row={row} metrics={metrics} funnelId={funnel.id} projectId={projectId} />
+              ))}
+              {/* Draft row */}
+              <tr className="bg-muted/20">
+                <td className="px-2 py-1">
+                  <Input
+                    type="date"
+                    value={draft.day}
+                    onChange={(e) => setDraft((s) => ({ ...s, day: e.target.value }))}
+                    className="h-7 text-xs"
+                  />
+                </td>
+                <td className="px-2 py-1 text-xs text-muted-foreground">{dayOfWeek(draft.day)}</td>
+                {metrics.map((m) => (
+                  <td key={m.id} className="px-2 py-1">
                     <Input
-                      type="date"
-                      value={draft.day_date}
-                      onChange={(e) => setDraft((s) => ({ ...s, day_date: e.target.value }))}
-                      className="h-7 text-xs"
+                      type="number"
+                      step="any"
+                      value={draft.values[m.key] ?? ''}
+                      onChange={(e) =>
+                        setDraft((s) => ({ ...s, values: { ...s.values, [m.key]: e.target.value } }))
+                      }
+                      className="h-7 text-right text-xs"
                     />
                   </td>
-                  <td className="px-2 py-1 text-xs text-muted-foreground">{dayOfWeek(draft.day_date)}</td>
-                  <td className="px-2 py-1">
-                    <select
-                      value={draft.funnel_id}
-                      onChange={(e) => setDraft((s) => ({ ...s, funnel_id: e.target.value }))}
-                      className="h-7 w-full rounded-md border border-input bg-background px-2 text-xs"
-                    >
-                      {funnels.map((f) => (
-                        <option key={f.id} value={f.id}>{f.name}</option>
-                      ))}
-                    </select>
-                  </td>
-                  {(['applications', 'op_calls', 'sales_count', 'revenue', 'traffic_spend'] as const).map((k) => (
-                    <td key={k} className="px-2 py-1">
-                      <Input
-                        type="number"
-                        step="any"
-                        value={draft[k] as string}
-                        onChange={(e) => setDraft((s) => ({ ...s, [k]: e.target.value }))}
-                        className="h-7 text-right text-xs"
-                      />
-                    </td>
-                  ))}
-                  <td className="px-2 py-1">
-                    <Input
-                      value={draft.comment}
-                      onChange={(e) => setDraft((s) => ({ ...s, comment: e.target.value }))}
-                      className="h-7 text-xs"
-                      placeholder="опц."
-                    />
-                  </td>
-                  <td className="px-2 py-1 text-right">
-                    <Button size="sm" onClick={submitDraft}>+</Button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+                ))}
+                <td className="px-2 py-1">
+                  <Input
+                    value={draft.comment}
+                    onChange={(e) => setDraft((s) => ({ ...s, comment: e.target.value }))}
+                    className="h-7 text-xs"
+                  />
+                </td>
+                <td className="px-2 py-1 text-right">
+                  <Button size="sm" onClick={submitDraft}>
+                    +
+                  </Button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   )
 }
 
-function JournalRow({
+function LogRow({
   row,
+  metrics,
+  funnelId,
   projectId,
 }: {
-  row: FunnelDailyJournal & { funnel_name: string }
+  row: FunnelDailyLog
+  metrics: FunnelMetric[]
+  funnelId: string
   projectId: string
 }) {
   const [, startTransition] = useTransition()
-  const upd = (field: 'applications' | 'op_calls' | 'sales_count' | 'revenue' | 'traffic_spend', e: React.FocusEvent<HTMLInputElement>) => {
-    const v = Number(e.target.value) || 0
-    if (v !== Number(row[field])) startTransition(() => updateJournalField(row.id, projectId, field, v))
-  }
   return (
     <tr className="hover:bg-muted/10">
-      <td className="px-2 py-1 text-xs">{ru(row.day_date)}</td>
+      <td className="px-2 py-1 text-xs">{new Date(row.day_date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}</td>
       <td className="px-2 py-1 text-xs text-muted-foreground">{dayOfWeek(row.day_date)}</td>
-      <td className="px-2 py-1 text-xs">{row.funnel_name}</td>
-      {(['applications', 'op_calls', 'sales_count', 'revenue', 'traffic_spend'] as const).map((k) => (
-        <td key={k} className="px-2 py-1">
+      {metrics.map((m) => (
+        <td key={m.id} className="px-2 py-1">
           <Input
             type="number"
             step="any"
-            defaultValue={Number(row[k]) || ''}
-            onBlur={(e) => upd(k, e)}
+            defaultValue={row.values?.[m.key] ?? ''}
+            onBlur={(e) => {
+              const newV = Number(e.target.value) || 0
+              const oldV = Number(row.values?.[m.key] ?? 0)
+              if (newV !== oldV) {
+                const nextValues = { ...(row.values ?? {}) }
+                if (newV === 0) delete nextValues[m.key]
+                else nextValues[m.key] = newV
+                startTransition(() => upsertDailyLog(funnelId, projectId, row.day_date, nextValues, row.comment))
+              }
+            }}
             className="h-7 text-right text-xs"
           />
         </td>
@@ -829,7 +1021,7 @@ function JournalRow({
           defaultValue={row.comment ?? ''}
           onBlur={(e) => {
             const v = e.target.value
-            if (v !== (row.comment ?? '')) startTransition(() => updateJournalField(row.id, projectId, 'comment', v || null))
+            if (v !== (row.comment ?? '')) startTransition(() => upsertDailyLog(funnelId, projectId, row.day_date, row.values ?? {}, v || null))
           }}
           className="h-7 text-xs"
         />
@@ -838,7 +1030,7 @@ function JournalRow({
         <button
           type="button"
           onClick={() => {
-            if (confirm('Видалити рядок?')) startTransition(() => deleteJournalRow(row.id, projectId))
+            if (confirm('Видалити рядок?')) startTransition(() => deleteLogRow(row.id, projectId))
           }}
           className="text-muted-foreground hover:text-destructive"
         >
@@ -849,61 +1041,13 @@ function JournalRow({
   )
 }
 
-// Блок C: трафик ---------------------------------------------
-function BlockC({
-  projectId,
-  tracker,
-  funnels,
-}: {
-  projectId: string
-  tracker: MonthlyTracker
-  funnels: FullFunnel[]
-}) {
-  const [, startTransition] = useTransition()
-  const spend = funnels.reduce(
-    (s, f) => s + f.journal.reduce((ss, r) => ss + Number(r.traffic_spend), 0),
-    0,
-  )
-  const apps = funnels.reduce((s, f) => s + f.journal.reduce((ss, r) => ss + r.applications, 0), 0)
-  const revenue = funnels.reduce((s, f) => s + f.journal.reduce((ss, r) => ss + Number(r.revenue), 0), 0)
-  const cpl = apps > 0 ? Math.round(spend / apps) : 0
-  const roas = spend > 0 ? Math.round((revenue / spend) * 100) / 100 : 0
-  return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0">
-        <CardTitle className="text-base">C. Трафік</CardTitle>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={tracker.traffic_enabled}
-            onChange={(e) => startTransition(() => updateTrackerField(tracker.id, projectId, 'traffic_enabled', e.target.checked))}
-          />
-          Платний трафік є
-        </label>
-      </CardHeader>
-      {tracker.traffic_enabled ? (
-        <CardContent className="grid gap-3 sm:grid-cols-4">
-          <Stat title="Витрати (сума)" value={fmt(spend)} />
-          <Stat title="Анкет" value={fmt(apps)} />
-          <Stat title="CPL" value={fmt(cpl)} />
-          <Stat title="ROAS" value={String(roas)} />
-        </CardContent>
-      ) : (
-        <CardContent className="text-sm text-muted-foreground">
-          Якщо немає платного трафіку — залиш вимкненим. Інакше включи і вводь витрати у журналі.
-        </CardContent>
-      )}
-    </Card>
-  )
-}
-
-// Блок D: качество работы ------------------------------------
+// Блок D ----------------------------------------------------
 function BlockD({ projectId, tracker }: { projectId: string; tracker: MonthlyTracker }) {
   const [, startTransition] = useTransition()
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">D. Якість роботи з експертом</CardTitle>
+        <CardTitle className="text-base">Якість роботи з експертом</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-2">
@@ -931,7 +1075,9 @@ function BlockD({ projectId, tracker }: { projectId: string; tracker: MonthlyTra
             >
               <option value="">— не вказано —</option>
               {(['on_time', 'partial', 'failed'] as LaunchStatus[]).map((s) => (
-                <option key={s} value={s}>{LAUNCH_STATUS_LABEL[s]}</option>
+                <option key={s} value={s}>
+                  {LAUNCH_STATUS_LABEL[s]}
+                </option>
               ))}
             </select>
           </div>

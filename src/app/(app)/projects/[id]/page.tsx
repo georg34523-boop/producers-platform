@@ -5,6 +5,7 @@ import { getProject } from '@/lib/queries/projects'
 import { listProducts } from '@/lib/queries/products'
 import { listExpenses, listReturns } from '@/lib/queries/expenses'
 import {
+  funnelSemanticTotals,
   getCustomDrivers,
   getFunnels,
   getOrCreateTracker,
@@ -37,16 +38,22 @@ export default async function ProjectOverviewPage({
   ])
 
   const monthRange = currentMonthRange(year, month)
-  const allJournal = funnels.flatMap((f) => f.journal)
   const inMonth = (d: string) => {
     const dt = new Date(d + 'T00:00:00Z')
     return dt >= monthRange.from && dt <= monthRange.to
   }
-  const monthRows = allJournal.filter((r) => inMonth(r.day_date))
-  const revenue = monthRows.reduce((s, r) => s + Number(r.revenue), 0)
-  const salesCount = monthRows.reduce((s, r) => s + r.sales_count, 0)
+
+  // Семантические аггрегаты по всем воронкам
+  let revenue = 0
+  let salesCount = 0
+  let applications = 0
+  for (const f of funnels) {
+    const t = funnelSemanticTotals(f, inMonth)
+    revenue += t.revenue
+    salesCount += t.sales
+    applications += t.applications
+  }
   const avgCheck = salesCount > 0 ? revenue / salesCount : 0
-  const applications = monthRows.reduce((s, r) => s + r.applications, 0)
 
   const units = computeUnits({
     project: { work_model: project.work_model, fix_amount: project.fix_amount },
@@ -55,7 +62,8 @@ export default async function ProjectOverviewPage({
       id: f.id,
       product_id: f.product_id,
       is_mini_product: f.is_mini_product,
-      journal: f.journal,
+      metrics: f.metrics,
+      log: f.log,
     })),
     expenses,
     returns,

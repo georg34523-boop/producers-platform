@@ -34,7 +34,8 @@ export default async function UnitsPage({
       id: f.id,
       product_id: f.product_id,
       is_mini_product: f.is_mini_product,
-      journal: f.journal,
+      metrics: f.metrics,
+      log: f.log,
     })),
     expenses,
     returns,
@@ -42,7 +43,5 @@ export default async function UnitsPage({
     to: monthRange.to,
   })
 
-  return (
-    <UnitsView projectId={id} project={project} products={products} units={units} expenses={expenses} returns={returns} />
-  )
+  return <UnitsView projectId={id} project={project} products={products} units={units} expenses={expenses} returns={returns} />
 }

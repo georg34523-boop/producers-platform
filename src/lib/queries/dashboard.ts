@@ -1,13 +1,12 @@
 import 'server-only'
 
 import { createClient } from '@/lib/supabase/server'
-import type { Profile } from '@/lib/supabase/types'
+import type { FunnelDailyLog, FunnelMetric, Profile } from '@/lib/supabase/types'
 
 function thisMonth(): { year: number; month: number } {
   const d = new Date()
   return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 }
 }
-
 function daysInMonth(y: number, m: number): number {
   return new Date(Date.UTC(y, m, 0)).getUTCDate()
 }
@@ -27,7 +26,12 @@ export type DashboardRow = {
   has_tracker: boolean
 }
 
-function classifyFlag(actual: number, plans: { min: number; avg: number; max: number }, dayOfMonth: number, daysInMonth: number): DashboardRow['flag'] {
+function classifyFlag(
+  actual: number,
+  plans: { min: number; avg: number; max: number },
+  dayOfMonth: number,
+  daysInMonth: number,
+): DashboardRow['flag'] {
   if (plans.max > 0 && actual >= plans.max) return 'rocket'
   if (plans.avg > 0 && actual >= plans.avg) return 'success'
   const expected = plans.avg > 0 ? plans.avg * (dayOfMonth / daysInMonth) : 0
@@ -77,31 +81,33 @@ export async function listDashboard(): Promise<DashboardRow[]> {
     })
   }
 
-  // Считаем факт через funnel_daily_journal
-  const trackerIds = [...trackerByProject.values()].map((t) => t.id)
   const factByTracker = new Map<string, number>()
+  const trackerIds = [...trackerByProject.values()].map((t) => t.id)
   if (trackerIds.length > 0) {
-    const { data: funnels } = await supabase.from('funnels').select('id, tracker_id').in('tracker_id', trackerIds)
-    const tByFunnel = new Map<string, string>()
-    const funnelIds: string[] = []
-    for (const f of (funnels ?? []) as { id: string; tracker_id: string }[]) {
-      tByFunnel.set(f.id, f.tracker_id)
-      funnelIds.push(f.id)
+    const { data: funnels } = await supabase
+      .from('funnels')
+      .select('id, tracker_id, metrics:funnel_metrics(*), log:funnel_daily_log(*)')
+      .in('tracker_id', trackerIds)
+
+    type FunnelRaw = {
+      id: string
+      tracker_id: string
+      metrics: FunnelMetric[]
+      log: FunnelDailyLog[]
     }
-    if (funnelIds.length > 0) {
-      const monthStart = `${year}-${String(month).padStart(2, '0')}-01`
-      const monthEnd = `${year}-${String(month).padStart(2, '0')}-${String(daysInMonth(year, month)).padStart(2, '0')}`
-      const { data: rows } = await supabase
-        .from('funnel_daily_journal')
-        .select('funnel_id, revenue, day_date')
-        .in('funnel_id', funnelIds)
-        .gte('day_date', monthStart)
-        .lte('day_date', monthEnd)
-      for (const r of (rows ?? []) as { funnel_id: string; revenue: number }[]) {
-        const tid = tByFunnel.get(r.funnel_id)
-        if (!tid) continue
-        factByTracker.set(tid, (factByTracker.get(tid) ?? 0) + Number(r.revenue))
+    const monthStart = `${year}-${String(month).padStart(2, '0')}-01`
+    const monthEnd = `${year}-${String(month).padStart(2, '0')}-${String(daysInMonth(year, month)).padStart(2, '0')}`
+
+    for (const f of ((funnels ?? []) as unknown as FunnelRaw[])) {
+      const revMetric = f.metrics.find((m) => m.role === 'revenue')
+      if (!revMetric) continue
+      let rev = 0
+      for (const r of f.log) {
+        if (r.day_date < monthStart || r.day_date > monthEnd) continue
+        const v = r.values?.[revMetric.key]
+        if (typeof v === 'number' && Number.isFinite(v)) rev += v
       }
+      factByTracker.set(f.tracker_id, (factByTracker.get(f.tracker_id) ?? 0) + rev)
     }
   }
 

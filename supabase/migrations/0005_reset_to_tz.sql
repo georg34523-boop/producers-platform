@@ -242,7 +242,7 @@ create table monthly_trackers (
   applications_plan numeric not null default 0,
   avg_check_plan numeric not null default 0,
 
-  -- Блок C: трафик on/off (расход вводится по воронкам)
+  -- Блок C: трафик on/off (расход вводится по воронкам; в новой версии не используется)
   traffic_enabled boolean not null default false,
 
   -- Блок D: качество работы с экспертом

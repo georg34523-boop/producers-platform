@@ -113,9 +113,6 @@ export interface Funnel {
   name: string
   is_mini_product: boolean
   product_id: string | null
-  applications_plan: number
-  sales_plan: number
-  revenue_plan: number
   position: number
   created_at: string
 }
@@ -129,15 +126,25 @@ export interface FunnelMiniPrice {
   created_at: string
 }
 
-export interface FunnelDailyJournal {
+export type MetricRole = 'revenue' | 'sales' | 'applications' | 'traffic_spend' | 'other'
+
+export interface FunnelMetric {
+  id: string
+  funnel_id: string
+  key: string
+  label: string
+  role: MetricRole
+  unit: string | null
+  plan_value: number
+  position: number
+  created_at: string
+}
+
+export interface FunnelDailyLog {
   id: string
   funnel_id: string
   day_date: string
-  applications: number
-  op_calls: number
-  sales_count: number
-  revenue: number
-  traffic_spend: number
+  values: Record<string, number>
   comment: string | null
   created_at: string
   updated_at: string

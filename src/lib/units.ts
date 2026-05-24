@@ -1,9 +1,10 @@
 // Калькулятор юнитов проекта согласно ТЗ v2 §8.
-// Источник правды — funnel_daily_journal (агрегаты по воронке × день).
+// Источник правды — funnel_daily_log + funnel_metrics с ролями.
 
 import type {
   Funnel,
-  FunnelDailyJournal,
+  FunnelDailyLog,
+  FunnelMetric,
   Product,
   Project,
   ProjectExpense,
@@ -13,9 +14,9 @@ import type {
 export type UnitsInput = {
   project: Pick<Project, 'work_model' | 'fix_amount'>
   products: Product[]
-  /** Все воронки с привязкой к product_id, флагом мини-продукта и журналом */
   funnels: (Pick<Funnel, 'id' | 'product_id' | 'is_mini_product'> & {
-    journal: FunnelDailyJournal[]
+    metrics: FunnelMetric[]
+    log: FunnelDailyLog[]
   })[]
   expenses: ProjectExpense[]
   returns: ProjectReturn[]
@@ -24,7 +25,7 @@ export type UnitsInput = {
 }
 
 export type ProductRevenueRow = {
-  product_id: string | null // null = «Мини-продукты в воронках» или нераспределённое
+  product_id: string | null
   name: string
   qty: number
   revenue: number
@@ -34,8 +35,8 @@ export type ProductRevenueRow = {
 export type UnitsResult = {
   revenue_by_product: ProductRevenueRow[]
   gross_revenue: number
-  expert_share: number // что забирает эксперт
-  center_income: number // = gross - expert_share
+  expert_share: number
+  center_income: number
   center_expenses: number
   net_profit: number
   margin: number
@@ -92,22 +93,42 @@ function computeCenterShare(
   return profit * 0.5
 }
 
+function metricByRole(metrics: FunnelMetric[], role: FunnelMetric['role']): FunnelMetric | null {
+  return metrics.find((m) => m.role === role) ?? null
+}
+
+function sumMetricInRange(
+  metric: FunnelMetric | null,
+  log: FunnelDailyLog[],
+  from: Date,
+  to: Date,
+): number {
+  if (!metric) return 0
+  let s = 0
+  for (const r of log) {
+    if (!inRange(r.day_date, from, to)) continue
+    const v = r.values?.[metric.key]
+    if (typeof v === 'number' && Number.isFinite(v)) s += v
+  }
+  return s
+}
+
 export function computeUnits(input: UnitsInput): UnitsResult {
   const { project, products, funnels, expenses, returns, from, to } = input
   const productById = new Map(products.map((p) => [p.id, p]))
 
-  // 1. Журнал → агрегаты по воронкам за период
   const funnelAgg = funnels.map((f) => {
-    const j = f.journal.filter((r) => inRange(r.day_date, from, to))
+    const revM = metricByRole(f.metrics, 'revenue')
+    const salesM = metricByRole(f.metrics, 'sales')
+    const trafM = metricByRole(f.metrics, 'traffic_spend')
     return {
       ...f,
-      revenue: j.reduce((s, r) => s + Number(r.revenue), 0),
-      sales_count: j.reduce((s, r) => s + r.sales_count, 0),
-      traffic: j.reduce((s, r) => s + Number(r.traffic_spend), 0),
+      revenue: sumMetricInRange(revM, f.log, from, to),
+      sales_count: sumMetricInRange(salesM, f.log, from, to),
+      traffic: sumMetricInRange(trafM, f.log, from, to),
     }
   })
 
-  // 2. Возвраты в периоде
   const returnsInRange = returns.filter((r) => inRange(r.day_date, from, to))
   const totalReturns = returnsInRange.reduce((s, r) => s + Number(r.amount), 0)
   const returnsByProduct = new Map<string, number>()
@@ -116,7 +137,6 @@ export function computeUnits(input: UnitsInput): UnitsResult {
     returnsByProduct.set(r.product_id, (returnsByProduct.get(r.product_id) ?? 0) + Number(r.amount))
   }
 
-  // 3. Effective revenue (с учётом нюанса мини-продуктов для 70/30)
   let effectiveRevenue = 0
   for (const f of funnelAgg) {
     if (project.work_model === 'rev_70_30' && f.is_mini_product) {
@@ -140,12 +160,11 @@ export function computeUnits(input: UnitsInput): UnitsResult {
   const expertPart = gross - centerIncome
   const netProfit = centerIncome - centerExpenses
   const margin = gross > 0 ? netProfit / gross : 0
-
   const expertProfit = expertPart - adSpend
   const romi = adSpend > 0 ? (gross - adSpend) / adSpend : 0
   const drr = gross > 0 ? adSpend / gross : 0
 
-  // 4. Разрез выручки по продуктам
+  // Разрез выручки по продуктам
   const productRevMap = new Map<string, { qty: number; revenue: number }>()
   let miniAgg: { qty: number; revenue: number } | null = null
   let unassigned: { qty: number; revenue: number } | null = null
@@ -167,7 +186,6 @@ export function computeUnits(input: UnitsInput): UnitsResult {
       unassigned.revenue += f.revenue
     }
   }
-  // Вычитаем возвраты по продукту
   for (const [pid, retAmount] of returnsByProduct) {
     const cur = productRevMap.get(pid)
     if (cur) cur.revenue -= retAmount
