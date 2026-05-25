@@ -19,15 +19,20 @@ export default async function ProductsPage({
   const tracker = await getOrCreateTracker(id, year, month)
   const funnels = await getFunnels(tracker.id)
 
-  // Аггрегируем выручку и кол-во продаж через привязку воронка→продукт
+  // Аггрегируем выручку и кол-во продаж через привязку воронка→продукт (m:m, ділимо порівну)
   const byProduct = new Map<string, { qty: number; revenue: number }>()
   for (const f of funnels) {
-    if (f.is_mini_product || !f.product_id) continue
+    const pids = f.product_ids
+    if (pids.length === 0) continue
     const t = funnelSemanticTotals(f)
-    const cur = byProduct.get(f.product_id) ?? { qty: 0, revenue: 0 }
-    cur.qty += t.sales
-    cur.revenue += t.revenue
-    byProduct.set(f.product_id, cur)
+    const shareRev = t.revenue / pids.length
+    const shareQty = t.sales / pids.length
+    for (const pid of pids) {
+      const cur = byProduct.get(pid) ?? { qty: 0, revenue: 0 }
+      cur.qty += shareQty
+      cur.revenue += shareRev
+      byProduct.set(pid, cur)
+    }
   }
 
   const productsWithStats = products.map((p) => ({

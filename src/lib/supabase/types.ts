@@ -116,6 +116,7 @@ export interface Funnel {
   product_id: string | null
   traffic_enabled: boolean
   traffic_channel: string | null
+  traffic_channels: string[]
   position: number
   created_at: string
 }

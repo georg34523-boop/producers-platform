@@ -54,6 +54,7 @@ import {
   deleteMetric,
   deleteMiniPrice,
   deleteStage,
+  setFunnelProducts,
   setWeeklyPlan,
   updateFunnel,
   updateMetric,
@@ -65,6 +66,7 @@ type FullFunnel = Funnel & {
   mini_prices: FunnelMiniPrice[]
   metrics: FunnelMetric[]
   log: FunnelDailyLog[]
+  product_ids: string[]
 }
 
 // Утилиты ----------------------------------------------------
@@ -447,8 +449,15 @@ function FunnelCard({ funnel, onOpen }: { funnel: FullFunnel; onOpen: () => void
           <div className="truncate text-sm font-medium">{funnel.name}</div>
           {typeLabel ? <div className="truncate text-[11px] text-muted-foreground">{typeLabel}</div> : null}
         </div>
-        {funnel.traffic_channel ? (
-          <Badge variant="secondary" className="text-[10px]">{funnel.traffic_channel}</Badge>
+        {funnel.traffic_channels && funnel.traffic_channels.length > 0 ? (
+          <div className="flex flex-wrap justify-end gap-1">
+            {funnel.traffic_channels.slice(0, 2).map((c) => (
+              <Badge key={c} variant="secondary" className="text-[10px]">{c}</Badge>
+            ))}
+            {funnel.traffic_channels.length > 2 ? (
+              <Badge variant="secondary" className="text-[10px]">+{funnel.traffic_channels.length - 2}</Badge>
+            ) : null}
+          </div>
         ) : null}
       </div>
       <div className="grid grid-cols-2 gap-2 text-xs">
@@ -488,12 +497,29 @@ function NewFunnelDialog({
   const [, startTransition] = useTransition()
   const [type, setType] = useState<FunnelType>('webinar')
   const [name, setName] = useState('')
-  const [productId, setProductId] = useState('')
+  const [productIds, setProductIds] = useState<Set<string>>(new Set())
   const [trafficEnabled, setTrafficEnabled] = useState(true)
-  const [channel, setChannel] = useState<string>('')
+  const [channels, setChannels] = useState<Set<string>>(new Set())
 
   const defaults = FUNNEL_DEFAULTS[type]
   const isTripwire = type === 'tripwire'
+
+  const toggleProduct = (id: string) => {
+    setProductIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  const toggleChannel = (c: string) => {
+    setChannels((prev) => {
+      const next = new Set(prev)
+      if (next.has(c)) next.delete(c)
+      else next.add(c)
+      return next
+    })
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -522,17 +548,26 @@ function NewFunnelDialog({
           </div>
 
           <div className="space-y-1">
-            <Label>Продукт, на який веде</Label>
-            <select
-              value={productId}
-              onChange={(e) => setProductId(e.target.value)}
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-            >
-              <option value="">— не привʼязано —</option>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
+            <Label>Продукти, на які веде (можна декілька)</Label>
+            {products.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                У проєкті ще немає продуктів. Спочатку заведи їх на вкладці «Продукти».
+              </p>
+            ) : (
+              <div className="max-h-32 space-y-1 overflow-y-auto rounded-md border bg-background p-2">
+                {products.map((p) => (
+                  <label key={p.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={productIds.has(p.id)}
+                      onChange={() => toggleProduct(p.id)}
+                    />
+                    {p.name}
+                    <span className="text-xs text-muted-foreground">— {fmt(Number(p.current_price))} $</span>
+                  </label>
+                ))}
+              </div>
+            )}
             {isTripwire ? (
               <p className="text-[11px] text-muted-foreground">
                 У трипвайр-воронці тут продукт основної оплати. Ціни мини-продукту задаються після створення.
@@ -547,19 +582,21 @@ function NewFunnelDialog({
             </label>
             {trafficEnabled ? (
               <div className="mt-2 space-y-1">
-                <Label className="text-xs">Канал</Label>
-                <select
-                  value={channel}
-                  onChange={(e) => setChannel(e.target.value)}
-                  className="flex h-8 w-full rounded-md border border-input bg-background px-3 text-xs"
-                >
-                  <option value="">— не вказано —</option>
+                <Label className="text-xs">Канали трафіку (можна декілька)</Label>
+                <div className="grid grid-cols-2 gap-1">
                   {TRAFFIC_CHANNELS.map((c) => (
-                    <option key={c} value={c}>{c}</option>
+                    <label key={c} className="flex cursor-pointer items-center gap-1.5 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={channels.has(c)}
+                        onChange={() => toggleChannel(c)}
+                      />
+                      {c}
+                    </label>
                   ))}
-                </select>
+                </div>
                 <p className="mt-2 text-[11px] text-muted-foreground">
-                  Поля трафіку (Витрачено, Покази, Кліки, CR сайту) додаються після створення.
+                  Поля трафіку (Витрачено, Покази, Кліки, CR, та ін.) додаються після створення.
                 </p>
               </div>
             ) : null}
@@ -588,17 +625,16 @@ function NewFunnelDialog({
                   project_id: projectId,
                   name: name.trim(),
                   funnel_type: type,
-                  is_mini_product: false,
-                  product_id: productId || null,
+                  product_ids: [...productIds],
                   traffic_enabled: trafficEnabled,
-                  traffic_channel: channel,
+                  traffic_channels: [...channels],
                 })
                 if (id) onCreated(id)
                 setName('')
                 setType('webinar')
-                setProductId('')
+                setProductIds(new Set())
                 setTrafficEnabled(true)
-                setChannel('')
+                setChannels(new Set())
                 onOpenChange(false)
               })
             }
@@ -648,9 +684,22 @@ function FunnelSettings({
   const [newPriceVal, setNewPriceVal] = useState('')
   const isTripwire = funnel.funnel_type === 'tripwire'
 
+  const toggleProduct = (pid: string) => {
+    const next = new Set(funnel.product_ids)
+    if (next.has(pid)) next.delete(pid)
+    else next.add(pid)
+    startTransition(() => setFunnelProducts(funnel.id, projectId, [...next]))
+  }
+  const toggleChannel = (c: string) => {
+    const next = new Set(funnel.traffic_channels ?? [])
+    if (next.has(c)) next.delete(c)
+    else next.add(c)
+    startTransition(() => updateFunnel(funnel.id, projectId, { traffic_channels: [...next] }))
+  }
+
   return (
     <div className="space-y-3 rounded-md border bg-card/40 p-3">
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1">
           <Label className="text-xs">Назва</Label>
           <Input
@@ -675,19 +724,22 @@ function FunnelSettings({
             ))}
           </select>
         </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Продукт</Label>
-          <select
-            defaultValue={funnel.product_id ?? ''}
-            onChange={(e) => startTransition(() => updateFunnel(funnel.id, projectId, { product_id: e.target.value || null }))}
-            className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-          >
-            <option value="">— не привʼязано —</option>
+      </div>
+
+      <div className="space-y-1">
+        <Label className="text-xs">Продукти (можна декілька)</Label>
+        {products.length === 0 ? (
+          <p className="text-xs text-muted-foreground">У проєкті немає продуктів.</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-1 rounded-md border bg-background p-2 sm:grid-cols-3">
             {products.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
+              <label key={p.id} className="flex cursor-pointer items-center gap-1.5 text-sm">
+                <input type="checkbox" checked={funnel.product_ids.includes(p.id)} onChange={() => toggleProduct(p.id)} />
+                <span className="truncate">{p.name}</span>
+              </label>
             ))}
-          </select>
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Ціни мини-продукту — лише для типу tripwire */}
@@ -747,19 +799,25 @@ function FunnelSettings({
           Платний трафік
         </label>
         {funnel.traffic_enabled ? (
-          <>
-            <span className="text-xs text-muted-foreground">Канал:</span>
-            <select
-              defaultValue={funnel.traffic_channel ?? ''}
-              onChange={(e) => startTransition(() => updateFunnel(funnel.id, projectId, { traffic_channel: e.target.value || null }))}
-              className="h-7 rounded-md border border-input bg-background px-2 text-xs"
-            >
-              <option value="">—</option>
-              {TRAFFIC_CHANNELS.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </>
+          <div className="flex flex-1 flex-wrap items-center gap-1.5">
+            <span className="text-xs text-muted-foreground">Канали:</span>
+            {TRAFFIC_CHANNELS.map((c) => {
+              const active = (funnel.traffic_channels ?? []).includes(c)
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => toggleChannel(c)}
+                  className={cn(
+                    'rounded-md border px-2 py-0.5 text-[11px] transition-colors',
+                    active ? 'border-foreground bg-muted' : 'text-muted-foreground hover:bg-muted/30',
+                  )}
+                >
+                  {c}
+                </button>
+              )
+            })}
+          </div>
         ) : null}
         <Button
           variant="ghost"
@@ -1019,7 +1077,7 @@ function LibraryDialog({
   )
 }
 
-// Дневной лог -----------------------------------------------
+// Дневной лог: кнопка → модалка + историческая таблица --------
 function FunnelLog({
   funnel,
   projectId,
@@ -1031,96 +1089,214 @@ function FunnelLog({
   year: number
   month: number
 }) {
-  const [, startTransition] = useTransition()
-  // В журнале только редактируемые метрики (не computed)
+  const [addOpen, setAddOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const editableMetrics = funnel.metrics.filter((m) => !(m.computed_from && m.computed_from.length > 0))
-
-  const draftInit = useMemo(
-    () => ({
-      day: dayIso(year, month, new Date().getUTCDate()),
-      values: Object.fromEntries(editableMetrics.map((m) => [m.key, ''])) as Record<string, string>,
-      comment: '',
-    }),
-    [editableMetrics, year, month],
-  )
-  const [draft, setDraft] = useState(draftInit)
-
-  const submitDraft = () => {
-    if (editableMetrics.length === 0) return
-    const vals: Record<string, number> = {}
-    for (const m of editableMetrics) {
-      const v = Number(draft.values[m.key])
-      if (Number.isFinite(v) && v !== 0) vals[m.key] = v
-    }
-    startTransition(async () => {
-      await upsertDailyLog(funnel.id, projectId, draft.day, vals, draft.comment || null)
-      setDraft({ ...draftInit })
-    })
-  }
 
   return (
     <div className="space-y-2">
-      <div className="text-sm font-medium">Щоденний журнал</div>
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-medium">Журнал по днях</div>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" disabled={editableMetrics.length === 0} onClick={() => setHistoryOpen(true)}>
+            Історія ({funnel.log.length})
+          </Button>
+          <Button size="sm" disabled={editableMetrics.length === 0} onClick={() => setAddOpen(true)}>
+            <Plus className="mr-1 h-3.5 w-3.5" />
+            Внести дані за день
+          </Button>
+        </div>
+      </div>
+
       {editableMetrics.length === 0 ? (
-        <p className="text-xs text-muted-foreground">Додай етапи з бібліотеки — і тут зʼявиться журнал.</p>
+        <p className="text-xs text-muted-foreground">Додай етапи з бібліотеки — і зʼявиться можливість вести журнал.</p>
+      ) : funnel.log.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Записів ще немає. Натисни «Внести дані за день».</p>
       ) : (
-        <div className="overflow-x-auto rounded-md border">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
-              <tr>
-                <th className="px-2 py-2 text-left">Дата</th>
-                <th className="px-2 py-2 text-left">День</th>
-                {editableMetrics.map((m) => (
-                  <th key={m.id} className="px-2 py-2 text-right">
-                    {m.label}
-                    {m.unit ? <span className="ml-1 text-[10px] text-muted-foreground">({m.unit})</span> : null}
-                  </th>
-                ))}
-                <th className="px-2 py-2 text-left">Коментар</th>
-                <th className="px-2 py-2"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {funnel.log.map((row) => (
-                <LogRow key={row.id} row={row} metrics={editableMetrics} funnelId={funnel.id} projectId={projectId} />
-              ))}
-              <tr className="bg-muted/20">
-                <td className="px-2 py-1">
-                  <Input
-                    type="date"
-                    value={draft.day}
-                    onChange={(e) => setDraft((s) => ({ ...s, day: e.target.value }))}
-                    className="h-7 text-xs"
-                  />
-                </td>
-                <td className="px-2 py-1 text-xs text-muted-foreground">{dayOfWeek(draft.day)}</td>
-                {editableMetrics.map((m) => (
-                  <td key={m.id} className="px-2 py-1">
+        <div className="rounded-md border bg-card/40 p-2 text-xs text-muted-foreground">
+          Останні записи: {[...funnel.log].slice(-3).reverse().map((r) => new Date(r.day_date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })).join(', ')}
+          {funnel.log.length > 3 ? ` · усього ${funnel.log.length}` : null}
+        </div>
+      )}
+
+      <AddDayDialog
+        funnel={funnel}
+        projectId={projectId}
+        year={year}
+        month={month}
+        editableMetrics={editableMetrics}
+        open={addOpen}
+        onOpenChange={setAddOpen}
+      />
+
+      <HistoryDialog
+        funnel={funnel}
+        projectId={projectId}
+        editableMetrics={editableMetrics}
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+      />
+    </div>
+  )
+}
+
+function AddDayDialog({
+  funnel,
+  projectId,
+  year,
+  month,
+  editableMetrics,
+  open,
+  onOpenChange,
+}: {
+  funnel: FullFunnel
+  projectId: string
+  year: number
+  month: number
+  editableMetrics: FunnelMetric[]
+  open: boolean
+  onOpenChange: (o: boolean) => void
+}) {
+  const [, startTransition] = useTransition()
+  const [day, setDay] = useState(dayIso(year, month, new Date().getUTCDate()))
+  const [values, setValues] = useState<Record<string, string>>({})
+  const [comment, setComment] = useState('')
+
+  // Якщо для цього дня вже є запис — підставимо
+  const existing = funnel.log.find((r) => r.day_date === day)
+  useMemo(() => {
+    if (existing) {
+      const vals: Record<string, string> = {}
+      for (const m of editableMetrics) {
+        const v = existing.values?.[m.key]
+        vals[m.key] = v !== undefined && v !== 0 ? String(v) : ''
+      }
+      setValues(vals)
+      setComment(existing.comment ?? '')
+    } else {
+      setValues({})
+      setComment('')
+    }
+  }, [day, existing, editableMetrics])
+
+  const submit = () => {
+    const vals: Record<string, number> = {}
+    for (const m of editableMetrics) {
+      const v = Number(values[m.key])
+      if (Number.isFinite(v) && v !== 0) vals[m.key] = v
+    }
+    startTransition(async () => {
+      await upsertDailyLog(funnel.id, projectId, day, vals, comment || null)
+      onOpenChange(false)
+    })
+  }
+
+  // Групуємо за етапами для зручності
+  const grouped = groupedByStage(editableMetrics)
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Дані за день — {funnel.name}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <Label className="text-xs">Дата</Label>
+            <Input type="date" value={day} onChange={(e) => setDay(e.target.value)} />
+            <div className="text-[11px] text-muted-foreground">
+              {dayOfWeek(day)}
+              {existing ? ' · є запис, редагуєш' : ''}
+            </div>
+          </div>
+
+          {grouped.map((g) => (
+            <div key={g.stage_group} className="space-y-1">
+              <div className="text-xs font-medium text-muted-foreground">{g.label}</div>
+              <div className="grid grid-cols-2 gap-2">
+                {g.metrics.map((m) => (
+                  <div key={m.id} className="space-y-0.5">
+                    <Label className="text-[11px]">
+                      {m.label}
+                      {m.unit ? <span className="ml-1 text-muted-foreground">({m.unit})</span> : null}
+                    </Label>
                     <Input
                       type="number"
                       step="any"
-                      value={draft.values[m.key] ?? ''}
-                      onChange={(e) => setDraft((s) => ({ ...s, values: { ...s.values, [m.key]: e.target.value } }))}
-                      className="h-7 text-right text-xs"
+                      value={values[m.key] ?? ''}
+                      onChange={(e) => setValues((s) => ({ ...s, [m.key]: e.target.value }))}
+                      className="h-8 text-sm"
                     />
-                  </td>
+                  </div>
                 ))}
-                <td className="px-2 py-1">
-                  <Input
-                    value={draft.comment}
-                    onChange={(e) => setDraft((s) => ({ ...s, comment: e.target.value }))}
-                    className="h-7 text-xs"
-                  />
-                </td>
-                <td className="px-2 py-1 text-right">
-                  <Button size="sm" onClick={submitDraft}>+</Button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+              </div>
+            </div>
+          ))}
+
+          <div className="space-y-1">
+            <Label className="text-xs">Коментар (опц.)</Label>
+            <Textarea rows={2} value={comment} onChange={(e) => setComment(e.target.value)} />
+          </div>
         </div>
-      )}
-    </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>Відміна</Button>
+          <Button onClick={submit}>Зберегти</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function HistoryDialog({
+  funnel,
+  projectId,
+  editableMetrics,
+  open,
+  onOpenChange,
+}: {
+  funnel: FullFunnel
+  projectId: string
+  editableMetrics: FunnelMetric[]
+  open: boolean
+  onOpenChange: (o: boolean) => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-6xl">
+        <DialogHeader>
+          <DialogTitle>Історія по днях — {funnel.name}</DialogTitle>
+        </DialogHeader>
+        {funnel.log.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">Поки немає записів.</p>
+        ) : (
+          <div className="overflow-x-auto rounded-md border">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-2 py-2 text-left">Дата</th>
+                  <th className="px-2 py-2 text-left">День</th>
+                  {editableMetrics.map((m) => (
+                    <th key={m.id} className="px-2 py-2 text-right">
+                      {m.label}
+                      {m.unit ? <span className="ml-1 text-[10px] text-muted-foreground">({m.unit})</span> : null}
+                    </th>
+                  ))}
+                  <th className="px-2 py-2 text-left">Коментар</th>
+                  <th className="px-2 py-2"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {[...funnel.log]
+                  .sort((a, b) => b.day_date.localeCompare(a.day_date))
+                  .map((row) => (
+                    <LogRow key={row.id} row={row} metrics={editableMetrics} funnelId={funnel.id} projectId={projectId} />
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
 

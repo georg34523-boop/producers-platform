@@ -256,6 +256,15 @@ export const TRAFFIC_FIELDS: TrafficField[] = [
   { key: 'impressions', label: 'Покази', role: 'other', unit: 'шт' },
   { key: 'clicks', label: 'Кліки', role: 'other', unit: 'шт' },
   { key: 'landing_cr', label: 'CR сайту', role: 'other', unit: '%' },
+  // Facebook / рекламний кабінет
+  { key: 'fb_purchases', label: 'Покупки FB', role: 'other', unit: 'шт' },
+  { key: 'fb_purchase_value', label: 'Сума покупок FB', role: 'other', unit: '$' },
+  { key: 'fb_purchase_price', label: 'Ціна покупки FB', role: 'other', unit: '$' },
+  // Діагностики / дзвінки (план vs факт у трафіку — корисно для відділу таргета)
+  { key: 'diagnostics_planned', label: 'Діагностик заплановано', role: 'other', unit: 'шт' },
+  { key: 'diagnostics_held', label: 'Діагностик проведено', role: 'other', unit: 'шт' },
+  { key: 'calls_planned', label: 'Дзвінків заплановано', role: 'other', unit: 'шт' },
+  { key: 'calls_held', label: 'Дзвінків проведено', role: 'other', unit: 'шт' },
 ]
 
 export const TRAFFIC_CHANNELS = [
@@ -291,4 +300,32 @@ export function getStageTemplate(key: string): StageTemplate | undefined {
 /** Згенерувати key метрики у форматі stage_group.<sub_key> для зберігання в jsonb-логу. */
 export function metricKeyFor(stageGroup: string, subKey: string): string {
   return `${stageGroup}__${subKey}`
+}
+
+/**
+ * Контекстне перейменування sub-метрики залежно від типу воронки.
+ * Наприклад, application.main → «Заявки з Відео» для VSL, «Заявки з вебінару» для Webinar.
+ * Якщо немає override, повертає дефолтний label з шаблону.
+ */
+const APPLICATION_MAIN_BY_TYPE: Partial<Record<FunnelType, string>> = {
+  vsl: 'Заявки з Відео',
+  webinar: 'Заявки з вебінару',
+  autowebinar: 'Заявки з автовебінару',
+  lead_magnet: 'Заявки з лід-магніту',
+  telegram_channel: 'Заявки з каналу',
+  subscription: 'Заявки з підписки',
+  direct_landing: 'Заявки з лендингу',
+  tripwire: 'Заявки з мини-продукту',
+}
+
+export function metricLabelFor(
+  template: string,
+  subKey: string,
+  defaultLabel: string,
+  funnelType: FunnelType | null,
+): string {
+  if (template === 'application' && subKey === 'main' && funnelType) {
+    return APPLICATION_MAIN_BY_TYPE[funnelType] ?? defaultLabel
+  }
+  return defaultLabel
 }

@@ -32,7 +32,7 @@ export default async function UnitsPage({
     products,
     funnels: funnels.map((f) => ({
       id: f.id,
-      product_id: f.product_id,
+      product_ids: f.product_ids,
       is_mini_product: f.is_mini_product,
       metrics: f.metrics,
       log: f.log,

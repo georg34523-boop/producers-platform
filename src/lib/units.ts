@@ -14,7 +14,9 @@ import type {
 export type UnitsInput = {
   project: Pick<Project, 'work_model' | 'fix_amount'>
   products: Product[]
-  funnels: (Pick<Funnel, 'id' | 'product_id' | 'is_mini_product'> & {
+  funnels: (Pick<Funnel, 'id' | 'is_mini_product'> & {
+    /** Список product_id, на які веде воронка (m:m). Виручка ділиться порівну. */
+    product_ids: string[]
     metrics: FunnelMetric[]
     log: FunnelDailyLog[]
   })[]
@@ -202,11 +204,17 @@ export function computeUnits(input: UnitsInput): UnitsResult {
 
   for (const f of funnelAgg) {
     if (f.mainRevenue !== 0 || f.sales_count !== 0) {
-      if (f.product_id) {
-        const cur = productRevMap.get(f.product_id) ?? { qty: 0, revenue: 0 }
-        cur.qty += f.sales_count
-        cur.revenue += f.mainRevenue
-        productRevMap.set(f.product_id, cur)
+      const pids = f.product_ids ?? []
+      if (pids.length > 0) {
+        // Розподіляємо виручку і кількість порівну між привʼязаними продуктами
+        const shareRev = f.mainRevenue / pids.length
+        const shareQty = f.sales_count / pids.length
+        for (const pid of pids) {
+          const cur = productRevMap.get(pid) ?? { qty: 0, revenue: 0 }
+          cur.qty += shareQty
+          cur.revenue += shareRev
+          productRevMap.set(pid, cur)
+        }
       } else {
         if (!unassigned) unassigned = { qty: 0, revenue: 0 }
         unassigned.qty += f.sales_count

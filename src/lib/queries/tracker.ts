@@ -99,6 +99,7 @@ export type FunnelWithDetail = Funnel & {
   mini_prices: FunnelMiniPrice[]
   metrics: FunnelMetric[]
   log: FunnelDailyLog[]
+  product_ids: string[]
 }
 
 export async function getFunnels(trackerId: string): Promise<FunnelWithDetail[]> {
@@ -106,7 +107,11 @@ export async function getFunnels(trackerId: string): Promise<FunnelWithDetail[]>
   const { data } = await supabase
     .from('funnels')
     .select(
-      `*, mini_prices:funnel_mini_prices(*), metrics:funnel_metrics(*), log:funnel_daily_log(*)`,
+      `*,
+       mini_prices:funnel_mini_prices(*),
+       metrics:funnel_metrics(*),
+       log:funnel_daily_log(*),
+       funnel_products(product_id)`,
     )
     .eq('tracker_id', trackerId)
     .order('position')
@@ -115,12 +120,14 @@ export async function getFunnels(trackerId: string): Promise<FunnelWithDetail[]>
     mini_prices: FunnelMiniPrice[]
     metrics: FunnelMetric[]
     log: FunnelDailyLog[]
+    funnel_products: { product_id: string }[]
   }
   return ((data ?? []) as unknown as Raw[]).map((f) => ({
     ...f,
     mini_prices: [...f.mini_prices].sort((a, b) => a.position - b.position),
     metrics: [...f.metrics].sort((a, b) => a.position - b.position),
     log: [...f.log].sort((a, b) => a.day_date.localeCompare(b.day_date)),
+    product_ids: f.funnel_products.map((fp) => fp.product_id),
   }))
 }
 

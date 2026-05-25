@@ -9,6 +9,7 @@ import {
   type FunnelType,
   getStageTemplate,
   metricKeyFor,
+  metricLabelFor,
 } from '@/lib/funnel-library'
 import { createClient } from '@/lib/supabase/server'
 
@@ -93,10 +94,9 @@ const CreateFunnelSchema = z.object({
     'telegram_channel',
     'direct_landing',
   ]),
-  is_mini_product: z.boolean().default(false),
-  product_id: z.union([z.uuid(), z.literal('')]).transform((v) => (v === '' ? null : v)),
+  product_ids: z.array(z.uuid()).default([]),
   traffic_enabled: z.boolean().default(true),
-  traffic_channel: z.string().max(60).optional().or(z.literal('')),
+  traffic_channels: z.array(z.string().max(60)).default([]),
 })
 
 export async function createFunnel(input: {
@@ -104,13 +104,12 @@ export async function createFunnel(input: {
   project_id: string
   name: string
   funnel_type: FunnelType
-  is_mini_product: boolean
-  product_id: string | null
+  product_ids: string[]
   traffic_enabled: boolean
-  traffic_channel: string
+  traffic_channels: string[]
 }): Promise<string | null> {
   await requireProfile()
-  const parsed = CreateFunnelSchema.safeParse({ ...input, product_id: input.product_id ?? '' })
+  const parsed = CreateFunnelSchema.safeParse(input)
   if (!parsed.success) return null
 
   const supabase = await createClient()
@@ -128,24 +127,52 @@ export async function createFunnel(input: {
       tracker_id: parsed.data.tracker_id,
       name: parsed.data.name,
       funnel_type: parsed.data.funnel_type,
-      is_mini_product: parsed.data.is_mini_product,
-      product_id: parsed.data.product_id,
+      product_id: parsed.data.product_ids[0] ?? null, // legacy primary
       traffic_enabled: parsed.data.traffic_enabled,
-      traffic_channel: parsed.data.traffic_channel || null,
+      traffic_channels: parsed.data.traffic_channels,
       position: (last?.position ?? -1) + 1,
     })
     .select('id')
     .single()
   if (error || !funnel) return null
 
+  // Привʼязка до продуктів (m:m)
+  if (parsed.data.product_ids.length > 0) {
+    await supabase
+      .from('funnel_products')
+      .insert(parsed.data.product_ids.map((pid) => ({ funnel_id: funnel.id, product_id: pid })))
+  }
+
   // Авто-добавление стандартных этапов для выбранного типа
   const defaults = FUNNEL_DEFAULTS[parsed.data.funnel_type]
   for (const tplKey of defaults) {
-    await addStageInternal(supabase, funnel.id, tplKey)
+    await addStageInternal(supabase, funnel.id, tplKey, parsed.data.funnel_type)
   }
 
   revalidate(parsed.data.project_id)
   return funnel.id
+}
+
+/** Управління multi-product. */
+export async function setFunnelProducts(
+  funnelId: string,
+  projectId: string,
+  productIds: string[],
+): Promise<void> {
+  await requireProfile()
+  const supabase = await createClient()
+  await supabase.from('funnel_products').delete().eq('funnel_id', funnelId)
+  if (productIds.length > 0) {
+    await supabase
+      .from('funnel_products')
+      .insert(productIds.map((pid) => ({ funnel_id: funnelId, product_id: pid })))
+  }
+  // Оновлюємо primary product_id (перший зі списку)
+  await supabase
+    .from('funnels')
+    .update({ product_id: productIds[0] ?? null })
+    .eq('id', funnelId)
+  revalidate(projectId)
 }
 
 export async function updateFunnel(
@@ -158,6 +185,7 @@ export async function updateFunnel(
     funnel_type: FunnelType
     traffic_enabled: boolean
     traffic_channel: string | null
+    traffic_channels: string[]
   }>,
 ): Promise<void> {
   await requireProfile()
@@ -214,11 +242,11 @@ async function addStageInternal(
   supabase: Awaited<ReturnType<typeof createClient>>,
   funnelId: string,
   templateKey: string,
+  funnelType: FunnelType | null = null,
 ): Promise<void> {
   const tpl = getStageTemplate(templateKey)
   if (!tpl) return
 
-  // Determine variant: if template supports variants, find next available index
   let stageGroup = tpl.template
   if (tpl.variants && tpl.variants > 1) {
     const { data: existing } = await supabase
@@ -231,7 +259,6 @@ async function addStageInternal(
     while (taken.has(`${tpl.template}_${idx}`)) idx++
     stageGroup = `${tpl.template}_${idx}`
   } else {
-    // Если уже есть — не дублируем
     const { data: existing } = await supabase
       .from('funnel_metrics')
       .select('id')
@@ -240,6 +267,13 @@ async function addStageInternal(
       .limit(1)
       .maybeSingle()
     if (existing) return
+  }
+
+  // Якщо funnelType не передано — підтягнемо з БД (для addStageFromTemplate)
+  let resolvedType: FunnelType | null = funnelType
+  if (!resolvedType) {
+    const { data: f } = await supabase.from('funnels').select('funnel_type').eq('id', funnelId).maybeSingle()
+    resolvedType = (f?.funnel_type as FunnelType | null) ?? null
   }
 
   const { data: last } = await supabase
@@ -255,14 +289,12 @@ async function addStageInternal(
     funnel_id: funnelId,
     stage_group: stageGroup,
     key: metricKeyFor(stageGroup, m.key),
-    label: m.label,
+    label: metricLabelFor(tpl.template, m.key, m.label, resolvedType),
     role: m.role,
     unit: m.unit ?? null,
     plan_value: 0,
     position: startPos + i,
-    computed_from: m.computed_from
-      ? m.computed_from.map((k) => metricKeyFor(stageGroup, k))
-      : null,
+    computed_from: m.computed_from ? m.computed_from.map((k) => metricKeyFor(stageGroup, k)) : null,
   }))
 
   await supabase.from('funnel_metrics').insert(rows)
