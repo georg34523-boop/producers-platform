@@ -99,13 +99,15 @@ export async function listDashboard(): Promise<DashboardRow[]> {
     const monthEnd = `${year}-${String(month).padStart(2, '0')}-${String(daysInMonth(year, month)).padStart(2, '0')}`
 
     for (const f of ((funnels ?? []) as unknown as FunnelRaw[])) {
-      const revMetric = f.metrics.find((m) => m.role === 'revenue')
-      if (!revMetric) continue
+      const revMetrics = f.metrics.filter((m) => m.role === 'revenue')
+      if (revMetrics.length === 0) continue
       let rev = 0
       for (const r of f.log) {
         if (r.day_date < monthStart || r.day_date > monthEnd) continue
-        const v = r.values?.[revMetric.key]
-        if (typeof v === 'number' && Number.isFinite(v)) rev += v
+        for (const m of revMetrics) {
+          const v = r.values?.[m.key]
+          if (typeof v === 'number' && Number.isFinite(v)) rev += v
+        }
       }
       factByTracker.set(f.tracker_id, (factByTracker.get(f.tracker_id) ?? 0) + rev)
     }

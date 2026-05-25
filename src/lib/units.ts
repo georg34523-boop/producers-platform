@@ -195,7 +195,7 @@ export function computeUnits(input: UnitsInput): UnitsResult {
 
   // Разрез выручки по продуктам:
   //  - main_revenue → привʼязаний продукт (або «без привʼязки»)
-  //  - mini_revenue → «Мини-продукти в воронках» (агрегована)
+  //  - mini_revenue → «Мини-продукти в воронках» (агрегована, без привʼязки до продукту)
   const productRevMap = new Map<string, { qty: number; revenue: number }>()
   let miniAgg: { qty: number; revenue: number } | null = null
   let unassigned: { qty: number; revenue: number } | null = null
@@ -207,7 +207,7 @@ export function computeUnits(input: UnitsInput): UnitsResult {
         cur.qty += f.sales_count
         cur.revenue += f.mainRevenue
         productRevMap.set(f.product_id, cur)
-      } else if (!f.is_mini_product) {
+      } else {
         if (!unassigned) unassigned = { qty: 0, revenue: 0 }
         unassigned.qty += f.sales_count
         unassigned.revenue += f.mainRevenue
@@ -215,7 +215,6 @@ export function computeUnits(input: UnitsInput): UnitsResult {
     }
     if (f.miniRevenue !== 0) {
       if (!miniAgg) miniAgg = { qty: 0, revenue: 0 }
-      // Кількість окремо не агрегуємо (sales role у міні-етапу = кількість оплат міні)
       const miniSalesM = f.metrics.find((m) => m.role === 'sales' && m.stage_group?.startsWith('mini_payment'))
       if (miniSalesM) miniAgg.qty += sumMetricInRange(miniSalesM, f.log, from, to)
       miniAgg.revenue += f.miniRevenue

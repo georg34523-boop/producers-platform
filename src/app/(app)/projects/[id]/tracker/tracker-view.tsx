@@ -346,7 +346,7 @@ function WeeklyPlanInput({
   )
 }
 
-// Воронки: табы + детальная панель ---------------------------
+// Воронки: карточки + модалка с детальной панелью -----------
 function FunnelsSection({
   projectId,
   tracker,
@@ -358,46 +358,115 @@ function FunnelsSection({
   funnels: FullFunnel[]
   products: Product[]
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(funnels[0]?.id ?? null)
+  const [openId, setOpenId] = useState<string | null>(null)
   const [newOpen, setNewOpen] = useState(false)
-  const selected = funnels.find((f) => f.id === selectedId) ?? funnels[0] ?? null
+  const openFunnel = funnels.find((f) => f.id === openId) ?? null
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <CardTitle className="text-base">Воронки</CardTitle>
+        <Button size="sm" variant="outline" onClick={() => setNewOpen(true)}>
+          <Plus className="mr-1 h-3.5 w-3.5" />
+          Створити воронку
+        </Button>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex flex-wrap items-center gap-1 border-b pb-2">
-          {funnels.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              onClick={() => setSelectedId(f.id)}
-              className={cn(
-                'rounded-md border px-3 py-1.5 text-sm transition-colors',
-                selected?.id === f.id ? 'border-foreground bg-muted' : 'border-transparent text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {f.name}
-              {f.funnel_type ? <span className="ml-1 text-[10px] text-muted-foreground">{FUNNEL_TYPE_LABEL[f.funnel_type as FunnelType] ?? f.funnel_type}</span> : null}
-            </button>
-          ))}
-          <Button size="sm" variant="outline" onClick={() => setNewOpen(true)} className="ml-2">
-            <Plus className="mr-1 h-3.5 w-3.5" />
-            Воронка
-          </Button>
-        </div>
-
-        {selected ? (
-          <FunnelDetail funnel={selected} projectId={projectId} products={products} year={tracker.year} month={tracker.month} />
+      <CardContent>
+        {funnels.length === 0 ? (
+          <p className="py-12 text-center text-sm text-muted-foreground">
+            Воронок ще немає. Натисни «Створити воронку» — обери тип, отримаєш рекомендовані етапи.
+          </p>
         ) : (
-          <p className="py-12 text-center text-sm text-muted-foreground">Додай першу воронку — обери тип, отримаєш рекомендовані етапи.</p>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {funnels.map((f) => (
+              <FunnelCard key={f.id} funnel={f} onOpen={() => setOpenId(f.id)} />
+            ))}
+          </div>
         )}
       </CardContent>
 
-      <NewFunnelDialog trackerId={tracker.id} projectId={projectId} products={products} open={newOpen} onOpenChange={setNewOpen} onCreated={setSelectedId} />
+      <NewFunnelDialog
+        trackerId={tracker.id}
+        projectId={projectId}
+        products={products}
+        open={newOpen}
+        onOpenChange={setNewOpen}
+        onCreated={(id) => setOpenId(id)}
+      />
+
+      {/* Деталь воронки в большом діалозі */}
+      <Dialog open={openFunnel !== null} onOpenChange={(o) => !o && setOpenId(null)}>
+        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-5xl">
+          {openFunnel ? (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  {openFunnel.name}
+                  {openFunnel.funnel_type ? (
+                    <Badge variant="secondary">
+                      {FUNNEL_TYPE_LABEL[openFunnel.funnel_type as FunnelType] ?? openFunnel.funnel_type}
+                    </Badge>
+                  ) : null}
+                </DialogTitle>
+              </DialogHeader>
+              <FunnelDetail funnel={openFunnel} projectId={projectId} products={products} year={tracker.year} month={tracker.month} />
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </Card>
+  )
+}
+
+function FunnelCard({ funnel, onOpen }: { funnel: FullFunnel; onOpen: () => void }) {
+  // Семантические агрегаты по факту за весь журнал
+  const totals = useMemo(() => {
+    const agg = { revenue: 0, sales: 0, applications: 0, traffic: 0 }
+    for (const m of funnel.metrics) {
+      const fact = m.computed_from?.length
+        ? m.computed_from.reduce((s, k) => s + sumMetric(funnel.log, k), 0)
+        : sumMetric(funnel.log, m.key)
+      if (m.role === 'revenue') agg.revenue += fact
+      else if (m.role === 'sales' && m.stage_group?.startsWith('payment')) agg.sales += fact
+      else if (m.role === 'applications') agg.applications += fact
+      else if (m.role === 'traffic_spend') agg.traffic += fact
+    }
+    return agg
+  }, [funnel])
+
+  const typeLabel = funnel.funnel_type ? FUNNEL_TYPE_LABEL[funnel.funnel_type as FunnelType] ?? funnel.funnel_type : null
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group flex flex-col rounded-md border bg-card/40 p-3 text-left transition-colors hover:border-foreground/30 hover:bg-card/60"
+    >
+      <div className="mb-2 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium">{funnel.name}</div>
+          {typeLabel ? <div className="truncate text-[11px] text-muted-foreground">{typeLabel}</div> : null}
+        </div>
+        {funnel.traffic_channel ? (
+          <Badge variant="secondary" className="text-[10px]">{funnel.traffic_channel}</Badge>
+        ) : null}
+      </div>
+      <div className="grid grid-cols-2 gap-2 text-xs">
+        <MiniStat label="Анкети" value={fmt(totals.applications)} />
+        <MiniStat label="Продажі" value={fmt(totals.sales)} />
+        <MiniStat label="Виручка, $" value={fmt(totals.revenue)} />
+        <MiniStat label="Трафік, $" value={fmt(totals.traffic)} />
+      </div>
+    </button>
+  )
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded bg-background px-2 py-1">
+      <div className="text-[10px] text-muted-foreground">{label}</div>
+      <div className="text-sm font-medium">{value}</div>
+    </div>
   )
 }
 
@@ -419,12 +488,12 @@ function NewFunnelDialog({
   const [, startTransition] = useTransition()
   const [type, setType] = useState<FunnelType>('webinar')
   const [name, setName] = useState('')
-  const [isMini, setIsMini] = useState(false)
   const [productId, setProductId] = useState('')
   const [trafficEnabled, setTrafficEnabled] = useState(true)
   const [channel, setChannel] = useState<string>('')
 
   const defaults = FUNNEL_DEFAULTS[type]
+  const isTripwire = type === 'tripwire'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -452,26 +521,24 @@ function NewFunnelDialog({
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder='Наприклад: «Вебінар Іванов 19.05»' autoFocus />
           </div>
 
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={isMini} onChange={(e) => setIsMini(e.target.checked)} />
-            Це чисто мини-продуктова воронка (без основного)
-          </label>
-
-          {!isMini ? (
-            <div className="space-y-1">
-              <Label>Продукт, на який веде</Label>
-              <select
-                value={productId}
-                onChange={(e) => setProductId(e.target.value)}
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-              >
-                <option value="">— не привʼязано —</option>
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </div>
-          ) : null}
+          <div className="space-y-1">
+            <Label>Продукт, на який веде</Label>
+            <select
+              value={productId}
+              onChange={(e) => setProductId(e.target.value)}
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="">— не привʼязано —</option>
+              {products.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            {isTripwire ? (
+              <p className="text-[11px] text-muted-foreground">
+                У трипвайр-воронці тут продукт основної оплати. Ціни мини-продукту задаються після створення.
+              </p>
+            ) : null}
+          </div>
 
           <div className="rounded-md border bg-muted/20 p-3">
             <label className="flex items-center gap-2 text-sm font-medium">
@@ -521,7 +588,7 @@ function NewFunnelDialog({
                   project_id: projectId,
                   name: name.trim(),
                   funnel_type: type,
-                  is_mini_product: isMini,
+                  is_mini_product: false,
                   product_id: productId || null,
                   traffic_enabled: trafficEnabled,
                   traffic_channel: channel,
@@ -529,7 +596,6 @@ function NewFunnelDialog({
                 if (id) onCreated(id)
                 setName('')
                 setType('webinar')
-                setIsMini(false)
                 setProductId('')
                 setTrafficEnabled(true)
                 setChannel('')
@@ -580,6 +646,7 @@ function FunnelSettings({
   const [, startTransition] = useTransition()
   const [newPriceName, setNewPriceName] = useState('')
   const [newPriceVal, setNewPriceVal] = useState('')
+  const isTripwire = funnel.funnel_type === 'tripwire'
 
   return (
     <div className="space-y-3 rounded-md border bg-card/40 p-3">
@@ -608,64 +675,65 @@ function FunnelSettings({
             ))}
           </select>
         </div>
-        {!funnel.is_mini_product ? (
-          <div className="space-y-1">
-            <Label className="text-xs">Продукт</Label>
-            <select
-              defaultValue={funnel.product_id ?? ''}
-              onChange={(e) => startTransition(() => updateFunnel(funnel.id, projectId, { product_id: e.target.value || null }))}
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-            >
-              <option value="">— не привʼязано —</option>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          </div>
-        ) : (
-          <div className="space-y-1">
-            <Label className="text-xs">Ціни мини-продукту</Label>
-            <div className="rounded-md border bg-background p-2">
-              {funnel.mini_prices.length === 0 ? (
-                <p className="text-xs text-muted-foreground">Поки немає тарифів</p>
-              ) : (
-                <ul className="space-y-1">
-                  {funnel.mini_prices.map((p) => (
-                    <li key={p.id} className="flex items-center justify-between gap-2 text-sm">
-                      <span>{p.name}</span>
-                      <span className="font-medium">{fmt(Number(p.price))} $</span>
-                      <button
-                        type="button"
-                        className="text-muted-foreground hover:text-destructive"
-                        onClick={() => startTransition(() => deleteMiniPrice(p.id, projectId))}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="mt-1 grid grid-cols-[1fr_80px_auto] gap-1">
-                <Input value={newPriceName} onChange={(e) => setNewPriceName(e.target.value)} placeholder="Тариф" className="h-7 text-xs" />
-                <Input type="number" value={newPriceVal} onChange={(e) => setNewPriceVal(e.target.value)} placeholder="$" className="h-7 text-xs" />
-                <Button
-                  size="sm"
-                  disabled={!newPriceName.trim() || !newPriceVal}
-                  onClick={() =>
-                    startTransition(async () => {
-                      await addMiniPrice(funnel.id, projectId, newPriceName.trim(), Number(newPriceVal))
-                      setNewPriceName('')
-                      setNewPriceVal('')
-                    })
-                  }
-                >
-                  +
-                </Button>
-              </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Продукт</Label>
+          <select
+            defaultValue={funnel.product_id ?? ''}
+            onChange={(e) => startTransition(() => updateFunnel(funnel.id, projectId, { product_id: e.target.value || null }))}
+            className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+          >
+            <option value="">— не привʼязано —</option>
+            {products.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Ціни мини-продукту — лише для типу tripwire */}
+      {isTripwire ? (
+        <div className="space-y-1">
+          <Label className="text-xs">Ціни мини-продукту</Label>
+          <div className="rounded-md border bg-background p-2">
+            {funnel.mini_prices.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Поки немає тарифів</p>
+            ) : (
+              <ul className="space-y-1">
+                {funnel.mini_prices.map((p) => (
+                  <li key={p.id} className="flex items-center justify-between gap-2 text-sm">
+                    <span>{p.name}</span>
+                    <span className="font-medium">{fmt(Number(p.price))} $</span>
+                    <button
+                      type="button"
+                      className="text-muted-foreground hover:text-destructive"
+                      onClick={() => startTransition(() => deleteMiniPrice(p.id, projectId))}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="mt-1 grid grid-cols-[1fr_80px_auto] gap-1">
+              <Input value={newPriceName} onChange={(e) => setNewPriceName(e.target.value)} placeholder="Назва тарифу" className="h-7 text-xs" />
+              <Input type="number" value={newPriceVal} onChange={(e) => setNewPriceVal(e.target.value)} placeholder="$" className="h-7 text-xs" />
+              <Button
+                size="sm"
+                disabled={!newPriceName.trim() || !newPriceVal}
+                onClick={() =>
+                  startTransition(async () => {
+                    await addMiniPrice(funnel.id, projectId, newPriceName.trim(), Number(newPriceVal))
+                    setNewPriceName('')
+                    setNewPriceVal('')
+                  })
+                }
+              >
+                +
+              </Button>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-3 border-t pt-2">
         <label className="flex items-center gap-2 text-sm">
@@ -693,14 +761,6 @@ function FunnelSettings({
             </select>
           </>
         ) : null}
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            defaultChecked={funnel.is_mini_product}
-            onChange={(e) => startTransition(() => updateFunnel(funnel.id, projectId, { is_mini_product: e.target.checked }))}
-          />
-          Чисто мини-продуктова
-        </label>
         <Button
           variant="ghost"
           size="sm"
