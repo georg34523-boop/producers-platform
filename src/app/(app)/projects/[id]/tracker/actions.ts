@@ -4,6 +4,12 @@ import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 
 import { requireProfile } from '@/lib/auth'
+import {
+  FUNNEL_DEFAULTS,
+  type FunnelType,
+  getStageTemplate,
+  metricKeyFor,
+} from '@/lib/funnel-library'
 import { createClient } from '@/lib/supabase/server'
 
 const revalidate = (projectId: string) => {
@@ -41,10 +47,7 @@ export async function updateTrackerField(
   ])
   if (!allowed.has(field)) return
   const supabase = await createClient()
-  await supabase
-    .from('monthly_trackers')
-    .update({ [field]: value })
-    .eq('id', trackerId)
+  await supabase.from('monthly_trackers').update({ [field]: value }).eq('id', trackerId)
   revalidate(projectId)
 }
 
@@ -74,22 +77,37 @@ export async function setWeeklyPlan(
 }
 
 // ============================================================
-// Funnels
+// Funnels (type + default stages)
 // ============================================================
 const CreateFunnelSchema = z.object({
   tracker_id: z.uuid(),
   project_id: z.uuid(),
   name: z.string().min(1).max(200).trim(),
+  funnel_type: z.enum([
+    'webinar',
+    'autowebinar',
+    'vsl',
+    'tripwire',
+    'subscription',
+    'lead_magnet',
+    'telegram_channel',
+    'direct_landing',
+  ]),
   is_mini_product: z.boolean().default(false),
   product_id: z.union([z.uuid(), z.literal('')]).transform((v) => (v === '' ? null : v)),
+  traffic_enabled: z.boolean().default(true),
+  traffic_channel: z.string().max(60).optional().or(z.literal('')),
 })
 
 export async function createFunnel(input: {
   tracker_id: string
   project_id: string
   name: string
+  funnel_type: FunnelType
   is_mini_product: boolean
   product_id: string | null
+  traffic_enabled: boolean
+  traffic_channel: string
 }): Promise<string | null> {
   await requireProfile()
   const parsed = CreateFunnelSchema.safeParse({ ...input, product_id: input.product_id ?? '' })
@@ -104,46 +122,43 @@ export async function createFunnel(input: {
     .limit(1)
     .maybeSingle()
 
-  const { data: funnel } = await supabase
+  const { data: funnel, error } = await supabase
     .from('funnels')
     .insert({
       tracker_id: parsed.data.tracker_id,
       name: parsed.data.name,
+      funnel_type: parsed.data.funnel_type,
       is_mini_product: parsed.data.is_mini_product,
       product_id: parsed.data.product_id,
+      traffic_enabled: parsed.data.traffic_enabled,
+      traffic_channel: parsed.data.traffic_channel || null,
       position: (last?.position ?? -1) + 1,
     })
     .select('id')
     .single()
+  if (error || !funnel) return null
 
-  // Дефолтный набор метрик при создании
-  if (funnel) {
-    const defaults = [
-      { key: 'applications', label: 'Анкети', role: 'applications', unit: 'шт' },
-      { key: 'sales', label: 'Продажі', role: 'sales', unit: 'шт' },
-      { key: 'revenue', label: 'Виручка', role: 'revenue', unit: '$' },
-    ]
-    await supabase.from('funnel_metrics').insert(
-      defaults.map((d, i) => ({
-        funnel_id: funnel.id,
-        key: d.key,
-        label: d.label,
-        role: d.role,
-        unit: d.unit,
-        plan_value: 0,
-        position: i,
-      })),
-    )
+  // Авто-добавление стандартных этапов для выбранного типа
+  const defaults = FUNNEL_DEFAULTS[parsed.data.funnel_type]
+  for (const tplKey of defaults) {
+    await addStageInternal(supabase, funnel.id, tplKey)
   }
 
   revalidate(parsed.data.project_id)
-  return funnel?.id ?? null
+  return funnel.id
 }
 
 export async function updateFunnel(
   funnelId: string,
   projectId: string,
-  patch: Partial<{ name: string; is_mini_product: boolean; product_id: string | null }>,
+  patch: Partial<{
+    name: string
+    is_mini_product: boolean
+    product_id: string | null
+    funnel_type: FunnelType
+    traffic_enabled: boolean
+    traffic_channel: string | null
+  }>,
 ): Promise<void> {
   await requireProfile()
   const supabase = await createClient()
@@ -193,62 +208,100 @@ export async function deleteMiniPrice(priceId: string, projectId: string): Promi
 }
 
 // ============================================================
-// Metrics (configurable per funnel)
+// Etapy iz biblioteki
 // ============================================================
-const MetricSchema = z.object({
-  funnel_id: z.uuid(),
-  project_id: z.uuid(),
-  key: z
-    .string()
-    .min(1)
-    .max(50)
-    .regex(/^[a-z0-9_]+$/, { error: 'Тільки a-z, 0-9, _ — без пробілів' })
-    .trim(),
-  label: z.string().min(1).max(60).trim(),
-  role: z.enum(['revenue', 'sales', 'applications', 'traffic_spend', 'other']).default('other'),
-  unit: z.string().max(20).optional().or(z.literal('')),
-  plan_value: z.coerce.number().min(0).default(0),
-})
+async function addStageInternal(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  funnelId: string,
+  templateKey: string,
+): Promise<void> {
+  const tpl = getStageTemplate(templateKey)
+  if (!tpl) return
 
-export async function addMetric(input: {
-  funnel_id: string
-  project_id: string
-  key: string
-  label: string
-  role: 'revenue' | 'sales' | 'applications' | 'traffic_spend' | 'other'
-  unit?: string
-  plan_value?: number
-}): Promise<{ error?: string } | undefined> {
-  await requireProfile()
-  const parsed = MetricSchema.safeParse(input)
-  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Помилка валідації' }
+  // Determine variant: if template supports variants, find next available index
+  let stageGroup = tpl.template
+  if (tpl.variants && tpl.variants > 1) {
+    const { data: existing } = await supabase
+      .from('funnel_metrics')
+      .select('stage_group')
+      .eq('funnel_id', funnelId)
+      .like('stage_group', `${tpl.template}_%`)
+    const taken = new Set((existing ?? []).map((r) => r.stage_group as string))
+    let idx = 1
+    while (taken.has(`${tpl.template}_${idx}`)) idx++
+    stageGroup = `${tpl.template}_${idx}`
+  } else {
+    // Если уже есть — не дублируем
+    const { data: existing } = await supabase
+      .from('funnel_metrics')
+      .select('id')
+      .eq('funnel_id', funnelId)
+      .eq('stage_group', stageGroup)
+      .limit(1)
+      .maybeSingle()
+    if (existing) return
+  }
 
-  const supabase = await createClient()
   const { data: last } = await supabase
     .from('funnel_metrics')
     .select('position')
-    .eq('funnel_id', parsed.data.funnel_id)
+    .eq('funnel_id', funnelId)
     .order('position', { ascending: false })
     .limit(1)
     .maybeSingle()
+  const startPos = (last?.position ?? -1) + 1
 
-  const { error } = await supabase.from('funnel_metrics').insert({
-    funnel_id: parsed.data.funnel_id,
-    key: parsed.data.key,
-    label: parsed.data.label,
-    role: parsed.data.role,
-    unit: parsed.data.unit || null,
-    plan_value: parsed.data.plan_value,
-    position: (last?.position ?? -1) + 1,
-  })
-  if (error) return { error: error.message }
-  revalidate(parsed.data.project_id)
+  const rows = tpl.metrics.map((m, i) => ({
+    funnel_id: funnelId,
+    stage_group: stageGroup,
+    key: metricKeyFor(stageGroup, m.key),
+    label: m.label,
+    role: m.role,
+    unit: m.unit ?? null,
+    plan_value: 0,
+    position: startPos + i,
+    computed_from: m.computed_from
+      ? m.computed_from.map((k) => metricKeyFor(stageGroup, k))
+      : null,
+  }))
+
+  await supabase.from('funnel_metrics').insert(rows)
 }
 
+export async function addStageFromTemplate(
+  funnelId: string,
+  projectId: string,
+  templateKey: string,
+): Promise<void> {
+  await requireProfile()
+  const supabase = await createClient()
+  await addStageInternal(supabase, funnelId, templateKey)
+  revalidate(projectId)
+}
+
+/** Видалити весь этап (всі метрики з stage_group). */
+export async function deleteStage(
+  funnelId: string,
+  projectId: string,
+  stageGroup: string,
+): Promise<void> {
+  await requireProfile()
+  const supabase = await createClient()
+  await supabase
+    .from('funnel_metrics')
+    .delete()
+    .eq('funnel_id', funnelId)
+    .eq('stage_group', stageGroup)
+  revalidate(projectId)
+}
+
+// ============================================================
+// Метрики (для редагування існуючих)
+// ============================================================
 export async function updateMetric(
   metricId: string,
   projectId: string,
-  patch: Partial<{ label: string; role: 'revenue' | 'sales' | 'applications' | 'traffic_spend' | 'other'; unit: string | null; plan_value: number }>,
+  patch: Partial<{ label: string; plan_value: number; unit: string | null }>,
 ): Promise<void> {
   await requireProfile()
   const supabase = await createClient()
@@ -264,7 +317,64 @@ export async function deleteMetric(metricId: string, projectId: string): Promise
 }
 
 // ============================================================
-// Daily log (jsonb по метрикам)
+// Параметри трафіку (library fields, додаються як метрики з stage_group='traffic')
+// ============================================================
+const TrafficFieldSchema = z.object({
+  funnel_id: z.uuid(),
+  project_id: z.uuid(),
+  key: z.string().min(1).max(40),
+  label: z.string().min(1).max(80),
+  role: z.enum(['traffic_spend', 'other']).default('other'),
+  unit: z.string().max(10).optional().or(z.literal('')),
+})
+
+export async function addTrafficField(input: {
+  funnel_id: string
+  project_id: string
+  key: string
+  label: string
+  role: 'traffic_spend' | 'other'
+  unit?: string
+}): Promise<void> {
+  await requireProfile()
+  const parsed = TrafficFieldSchema.safeParse(input)
+  if (!parsed.success) return
+
+  const supabase = await createClient()
+  const fullKey = metricKeyFor('traffic', parsed.data.key)
+  // not duplicate
+  const { data: existing } = await supabase
+    .from('funnel_metrics')
+    .select('id')
+    .eq('funnel_id', parsed.data.funnel_id)
+    .eq('key', fullKey)
+    .maybeSingle()
+  if (existing) return
+
+  const { data: last } = await supabase
+    .from('funnel_metrics')
+    .select('position')
+    .eq('funnel_id', parsed.data.funnel_id)
+    .order('position', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  await supabase.from('funnel_metrics').insert({
+    funnel_id: parsed.data.funnel_id,
+    stage_group: 'traffic',
+    key: fullKey,
+    label: parsed.data.label,
+    role: parsed.data.role,
+    unit: parsed.data.unit || null,
+    plan_value: 0,
+    position: (last?.position ?? -1) + 1,
+    computed_from: null,
+  })
+  revalidate(parsed.data.project_id)
+}
+
+// ============================================================
+// Daily log
 // ============================================================
 export async function upsertDailyLog(
   funnelId: string,
@@ -275,16 +385,18 @@ export async function upsertDailyLog(
 ): Promise<void> {
   await requireProfile()
   const supabase = await createClient()
-  // Чистим NaN/undefined
   const clean: Record<string, number> = {}
   for (const [k, v] of Object.entries(values)) {
     const n = Number(v)
     if (Number.isFinite(n) && n !== 0) clean[k] = n
   }
-
   const allEmpty = Object.keys(clean).length === 0 && !comment
   if (allEmpty) {
-    await supabase.from('funnel_daily_log').delete().eq('funnel_id', funnelId).eq('day_date', day)
+    await supabase
+      .from('funnel_daily_log')
+      .delete()
+      .eq('funnel_id', funnelId)
+      .eq('day_date', day)
   } else {
     await supabase.from('funnel_daily_log').upsert(
       {

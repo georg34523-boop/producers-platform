@@ -17,6 +17,20 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  FUNNEL_DEFAULTS,
+  FUNNEL_TYPE_HINT,
+  FUNNEL_TYPE_LABEL,
+  type FunnelType,
+  getStageTemplate,
+  STAGE_GROUP_LABEL,
+  STAGE_LIBRARY,
+  type StageGroup,
+  type StageTemplate,
+  TRAFFIC_CHANNELS,
+  TRAFFIC_FIELDS,
+  metricKeyFor,
+} from '@/lib/funnel-library'
 import { LAUNCH_STATUS_LABEL, MONTH_LABEL_RU } from '@/lib/labels'
 import type {
   Funnel,
@@ -24,7 +38,6 @@ import type {
   FunnelMetric,
   FunnelMiniPrice,
   LaunchStatus,
-  MetricRole,
   MonthlyTracker,
   Product,
   TrackerWeeklyPlan,
@@ -32,13 +45,15 @@ import type {
 import { cn } from '@/lib/utils'
 
 import {
-  addMetric,
   addMiniPrice,
+  addStageFromTemplate,
+  addTrafficField,
   createFunnel,
   deleteFunnel,
   deleteLogRow,
   deleteMetric,
   deleteMiniPrice,
+  deleteStage,
   setWeeklyPlan,
   updateFunnel,
   updateMetric,
@@ -79,9 +94,6 @@ function weeksOfMonth(y: number, m: number) {
 function dayOfWeek(date: string): string {
   return ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'][new Date(date + 'T00:00:00Z').getUTCDay()]!
 }
-function metricByRole(metrics: FunnelMetric[], role: MetricRole): FunnelMetric | null {
-  return metrics.find((m) => m.role === role) ?? null
-}
 function sumMetric(log: FunnelDailyLog[], key: string): number {
   let s = 0
   for (const r of log) {
@@ -89,6 +101,35 @@ function sumMetric(log: FunnelDailyLog[], key: string): number {
     if (typeof v === 'number' && Number.isFinite(v)) s += v
   }
   return s
+}
+function metricFact(m: FunnelMetric, log: FunnelDailyLog[]): number {
+  // Для computed-метрик факт = сумма фактов входящих ключей
+  if (m.computed_from && m.computed_from.length > 0) {
+    return m.computed_from.reduce((s, k) => s + sumMetric(log, k), 0)
+  }
+  return sumMetric(log, m.key)
+}
+
+function groupedByStage(metrics: FunnelMetric[]) {
+  // Возвращает массив { stage_group, label, metrics[] } в порядке position
+  const order: string[] = []
+  const groups = new Map<string, FunnelMetric[]>()
+  for (const m of [...metrics].sort((a, b) => a.position - b.position)) {
+    const sg = m.stage_group ?? 'other'
+    if (!groups.has(sg)) {
+      groups.set(sg, [])
+      order.push(sg)
+    }
+    groups.get(sg)!.push(m)
+  }
+  return order.map((sg) => {
+    // Имя этапа: для variants 'webinar_2' → 'Вебінар #2'
+    const base = sg.replace(/_(\d+)$/, '')
+    const variant = sg.match(/_(\d+)$/)?.[1]
+    const tpl = getStageTemplate(base)
+    const label = tpl ? (variant ? `${tpl.label} #${variant}` : tpl.label) : sg
+    return { stage_group: sg, label, metrics: groups.get(sg)! }
+  })
 }
 
 // Орхестратор ------------------------------------------------
@@ -154,15 +195,17 @@ function BlockA({
   const weeks = weeksOfMonth(tracker.year, tracker.month)
   const planByWeek = new Map(weeklyPlans.map((p) => [p.week_index, Number(p.revenue_plan)]))
 
-  // Считаем выручку по дням из роли 'revenue'
-  type DayRev = { day_date: string; revenue: number }
-  const allRev: DayRev[] = []
+  // Считаем выручку по дням из всех revenue-метрик
+  const allRev: { day_date: string; revenue: number }[] = []
   for (const f of funnels) {
-    const m = metricByRole(f.metrics, 'revenue')
-    if (!m) continue
+    const revMetrics = f.metrics.filter((m) => m.role === 'revenue')
     for (const row of f.log) {
-      const v = row.values?.[m.key]
-      if (typeof v === 'number' && Number.isFinite(v)) allRev.push({ day_date: row.day_date, revenue: v })
+      let r = 0
+      for (const m of revMetrics) {
+        const v = row.values?.[m.key]
+        if (typeof v === 'number' && Number.isFinite(v)) r += v
+      }
+      if (r !== 0) allRev.push({ day_date: row.day_date, revenue: r })
     }
   }
   const totalFact = allRev.reduce((s, r) => s + r.revenue, 0)
@@ -213,8 +256,7 @@ function BlockA({
                   const fact = factByWeek.get(w.idx) ?? 0
                   const plan = planByWeek.get(w.idx) ?? 0
                   const wpct = plan > 0 ? Math.round((fact / plan) * 100) : 0
-                  const status =
-                    plan === 0 ? '—' : wpct >= 85 ? '🟢 в плані' : wpct >= 70 ? '🟡 нижче плану' : '🔴 критично'
+                  const status = plan === 0 ? '—' : wpct >= 85 ? '🟢 в плані' : wpct >= 70 ? '🟡 нижче плану' : '🔴 критично'
                   return (
                     <tr key={w.idx} className="hover:bg-muted/20">
                       <td className="px-3 py-2">
@@ -338,7 +380,7 @@ function FunnelsSection({
               )}
             >
               {f.name}
-              {f.is_mini_product ? <span className="ml-1 text-[10px] text-muted-foreground">(мини)</span> : null}
+              {f.funnel_type ? <span className="ml-1 text-[10px] text-muted-foreground">{FUNNEL_TYPE_LABEL[f.funnel_type as FunnelType] ?? f.funnel_type}</span> : null}
             </button>
           ))}
           <Button size="sm" variant="outline" onClick={() => setNewOpen(true)} className="ml-2">
@@ -350,7 +392,7 @@ function FunnelsSection({
         {selected ? (
           <FunnelDetail funnel={selected} projectId={projectId} products={products} year={tracker.year} month={tracker.month} />
         ) : (
-          <p className="py-12 text-center text-sm text-muted-foreground">Додай першу воронку — наприклад «Автовеб», «Живий веб», «Діагностика».</p>
+          <p className="py-12 text-center text-sm text-muted-foreground">Додай першу воронку — обери тип, отримаєш рекомендовані етапи.</p>
         )}
       </CardContent>
 
@@ -375,25 +417,46 @@ function NewFunnelDialog({
   onCreated: (id: string) => void
 }) {
   const [, startTransition] = useTransition()
+  const [type, setType] = useState<FunnelType>('webinar')
   const [name, setName] = useState('')
   const [isMini, setIsMini] = useState(false)
   const [productId, setProductId] = useState('')
+  const [trafficEnabled, setTrafficEnabled] = useState(true)
+  const [channel, setChannel] = useState<string>('')
+
+  const defaults = FUNNEL_DEFAULTS[type]
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Нова воронка</DialogTitle>
         </DialogHeader>
-        <div className="space-y-3">
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <Label>Тип воронки</Label>
+            <select
+              value={type}
+              onChange={(e) => setType(e.target.value as FunnelType)}
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+            >
+              {(Object.keys(FUNNEL_TYPE_LABEL) as FunnelType[]).map((t) => (
+                <option key={t} value={t}>{FUNNEL_TYPE_LABEL[t]}</option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">{FUNNEL_TYPE_HINT[type]}</p>
+          </div>
+
           <div className="space-y-1">
             <Label>Назва</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Автовеб / Живий веб / Діагностика…" autoFocus />
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder='Наприклад: «Вебінар Іванов 19.05»' autoFocus />
           </div>
+
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={isMini} onChange={(e) => setIsMini(e.target.checked)} />
-            Мини-продукт (трипвайр)
+            Це чисто мини-продуктова воронка (без основного)
           </label>
+
           {!isMini ? (
             <div className="space-y-1">
               <Label>Продукт, на який веде</Label>
@@ -404,21 +467,51 @@ function NewFunnelDialog({
               >
                 <option value="">— не привʼязано —</option>
                 {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
+                  <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
             </div>
           ) : null}
-          <p className="text-xs text-muted-foreground">
-            Стандартні метрики (Анкети / Продажі / Виручка) додадуться автоматично. Налаштування і додавання метрик — після створення.
-          </p>
+
+          <div className="rounded-md border bg-muted/20 p-3">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input type="checkbox" checked={trafficEnabled} onChange={(e) => setTrafficEnabled(e.target.checked)} />
+              Є платний трафік
+            </label>
+            {trafficEnabled ? (
+              <div className="mt-2 space-y-1">
+                <Label className="text-xs">Канал</Label>
+                <select
+                  value={channel}
+                  onChange={(e) => setChannel(e.target.value)}
+                  className="flex h-8 w-full rounded-md border border-input bg-background px-3 text-xs"
+                >
+                  <option value="">— не вказано —</option>
+                  {TRAFFIC_CHANNELS.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  Поля трафіку (Витрачено, Покази, Кліки, CR сайту) додаються після створення.
+                </p>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="rounded-md border bg-card/30 p-3">
+            <div className="mb-1 text-xs text-muted-foreground">Будуть додані етапи (можна редагувати після):</div>
+            <ul className="space-y-0.5 text-sm">
+              {defaults.map((k) => {
+                const t = getStageTemplate(k)
+                return (
+                  <li key={k}>· {t?.label ?? k}</li>
+                )
+              })}
+            </ul>
+          </div>
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Відміна
-          </Button>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>Відміна</Button>
           <Button
             disabled={!name.trim()}
             onClick={() =>
@@ -427,13 +520,19 @@ function NewFunnelDialog({
                   tracker_id: trackerId,
                   project_id: projectId,
                   name: name.trim(),
+                  funnel_type: type,
                   is_mini_product: isMini,
                   product_id: productId || null,
+                  traffic_enabled: trafficEnabled,
+                  traffic_channel: channel,
                 })
                 if (id) onCreated(id)
                 setName('')
+                setType('webinar')
                 setIsMini(false)
                 setProductId('')
+                setTrafficEnabled(true)
+                setChannel('')
                 onOpenChange(false)
               })
             }
@@ -446,6 +545,7 @@ function NewFunnelDialog({
   )
 }
 
+// Деталь воронки --------------------------------------------
 function FunnelDetail({
   funnel,
   projectId,
@@ -462,7 +562,7 @@ function FunnelDetail({
   return (
     <div className="space-y-5">
       <FunnelSettings funnel={funnel} projectId={projectId} products={products} />
-      <FunnelMetrics funnel={funnel} projectId={projectId} />
+      <FunnelStages funnel={funnel} projectId={projectId} />
       <FunnelLog funnel={funnel} projectId={projectId} year={year} month={month} />
     </div>
   )
@@ -483,7 +583,7 @@ function FunnelSettings({
 
   return (
     <div className="space-y-3 rounded-md border bg-card/40 p-3">
-      <div className="grid gap-3 sm:grid-cols-[1fr_auto_1fr]">
+      <div className="grid gap-3 sm:grid-cols-3">
         <div className="space-y-1">
           <Label className="text-xs">Назва</Label>
           <Input
@@ -494,28 +594,19 @@ function FunnelSettings({
             }}
           />
         </div>
-        <div className="flex items-end gap-3">
-          <label className="flex items-center gap-2 pb-2 text-sm">
-            <input
-              type="checkbox"
-              defaultChecked={funnel.is_mini_product}
-              onChange={(e) => startTransition(() => updateFunnel(funnel.id, projectId, { is_mini_product: e.target.checked }))}
-            />
-            Мини-продукт
-          </label>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-destructive hover:text-destructive"
-            onClick={() => {
-              if (confirm(`Видалити воронку «${funnel.name}» зі всіма даними?`)) {
-                startTransition(() => deleteFunnel(funnel.id, projectId))
-              }
-            }}
+        <div className="space-y-1">
+          <Label className="text-xs">Тип</Label>
+          <select
+            defaultValue={funnel.funnel_type ?? ''}
+            onChange={(e) =>
+              startTransition(() => updateFunnel(funnel.id, projectId, { funnel_type: e.target.value as FunnelType }))
+            }
+            className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
           >
-            <Trash2 className="mr-1 h-3.5 w-3.5" />
-            Видалити воронку
-          </Button>
+            {(Object.keys(FUNNEL_TYPE_LABEL) as FunnelType[]).map((t) => (
+              <option key={t} value={t}>{FUNNEL_TYPE_LABEL[t]}</option>
+            ))}
+          </select>
         </div>
         {!funnel.is_mini_product ? (
           <div className="space-y-1">
@@ -527,16 +618,14 @@ function FunnelSettings({
             >
               <option value="">— не привʼязано —</option>
               {products.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
+                <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
           </div>
         ) : (
           <div className="space-y-1">
             <Label className="text-xs">Ціни мини-продукту</Label>
-            <div className="space-y-1 rounded-md border bg-background p-2">
+            <div className="rounded-md border bg-background p-2">
               {funnel.mini_prices.length === 0 ? (
                 <p className="text-xs text-muted-foreground">Поки немає тарифів</p>
               ) : (
@@ -556,15 +645,9 @@ function FunnelSettings({
                   ))}
                 </ul>
               )}
-              <div className="mt-1 grid grid-cols-[1fr_90px_auto] gap-1">
+              <div className="mt-1 grid grid-cols-[1fr_80px_auto] gap-1">
                 <Input value={newPriceName} onChange={(e) => setNewPriceName(e.target.value)} placeholder="Тариф" className="h-7 text-xs" />
-                <Input
-                  type="number"
-                  value={newPriceVal}
-                  onChange={(e) => setNewPriceVal(e.target.value)}
-                  placeholder="$"
-                  className="h-7 text-xs"
-                />
+                <Input type="number" value={newPriceVal} onChange={(e) => setNewPriceVal(e.target.value)} placeholder="$" className="h-7 text-xs" />
                 <Button
                   size="sm"
                   disabled={!newPriceName.trim() || !newPriceVal}
@@ -583,289 +666,294 @@ function FunnelSettings({
           </div>
         )}
       </div>
+
+      <div className="flex flex-wrap items-center gap-3 border-t pt-2">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            defaultChecked={funnel.traffic_enabled}
+            onChange={(e) =>
+              startTransition(() => updateFunnel(funnel.id, projectId, { traffic_enabled: e.target.checked }))
+            }
+          />
+          Платний трафік
+        </label>
+        {funnel.traffic_enabled ? (
+          <>
+            <span className="text-xs text-muted-foreground">Канал:</span>
+            <select
+              defaultValue={funnel.traffic_channel ?? ''}
+              onChange={(e) => startTransition(() => updateFunnel(funnel.id, projectId, { traffic_channel: e.target.value || null }))}
+              className="h-7 rounded-md border border-input bg-background px-2 text-xs"
+            >
+              <option value="">—</option>
+              {TRAFFIC_CHANNELS.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </>
+        ) : null}
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            defaultChecked={funnel.is_mini_product}
+            onChange={(e) => startTransition(() => updateFunnel(funnel.id, projectId, { is_mini_product: e.target.checked }))}
+          />
+          Чисто мини-продуктова
+        </label>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto text-destructive hover:text-destructive"
+          onClick={() => {
+            if (confirm(`Видалити воронку «${funnel.name}» зі всіма даними?`)) {
+              startTransition(() => deleteFunnel(funnel.id, projectId))
+            }
+          }}
+        >
+          <Trash2 className="mr-1 h-3.5 w-3.5" />
+          Видалити воронку
+        </Button>
+      </div>
     </div>
   )
 }
 
-// Метрики ----------------------------------------------------
-const ROLE_LABEL: Record<MetricRole, string> = {
-  revenue: 'Виручка',
-  sales: 'Продажі',
-  applications: 'Анкети',
-  traffic_spend: 'Трафік',
-  other: 'Інше',
-}
-
-const QUICK_METRICS: { key: string; label: string; role: MetricRole; unit: string }[] = [
-  { key: 'budget', label: 'Бюджет', role: 'traffic_spend', unit: '$' },
-  { key: 'clicks', label: 'Кліки', role: 'other', unit: 'шт' },
-  { key: 'impressions', label: 'Покази', role: 'other', unit: 'шт' },
-  { key: 'leads', label: 'Ліди', role: 'other', unit: 'шт' },
-  { key: 'op_calls', label: 'Дзвінки ОП', role: 'other', unit: 'шт' },
-  { key: 'expert_calls', label: 'Дзвінки експерта', role: 'other', unit: 'шт' },
-]
-
-function FunnelMetrics({ funnel, projectId }: { funnel: FullFunnel; projectId: string }) {
+// Этапы воронки (стейдж-группы) -----------------------------
+function FunnelStages({ funnel, projectId }: { funnel: FullFunnel; projectId: string }) {
   const [, startTransition] = useTransition()
-  const [addOpen, setAddOpen] = useState(false)
+  const [libOpen, setLibOpen] = useState(false)
+  const stages = groupedByStage(funnel.metrics)
 
-  const existingKeys = new Set(funnel.metrics.map((m) => m.key))
+  const hasTraffic = stages.some((s) => s.stage_group === 'traffic')
+  const existingTrafficKeys = new Set(
+    funnel.metrics.filter((m) => m.stage_group === 'traffic').map((m) => m.key.replace('traffic__', '')),
+  )
+  const trafficLeft = TRAFFIC_FIELDS.filter((f) => !existingTrafficKeys.has(f.key))
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <div className="text-sm font-medium">Метрики воронки</div>
-        <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
+        <div className="text-sm font-medium">Етапи воронки</div>
+        <Button size="sm" variant="outline" onClick={() => setLibOpen(true)}>
           <Plus className="mr-1 h-3.5 w-3.5" />
-          Додати метрику
+          Додати етап з бібліотеки
         </Button>
       </div>
 
-      {funnel.metrics.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          Поки немає метрик. Додай хоча б Анкети / Продажі / Виручку.
-        </p>
-      ) : (
-        <div className="overflow-hidden rounded-md border">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2 text-left">Назва</th>
-                <th className="px-3 py-2 text-left">Роль</th>
-                <th className="px-3 py-2 text-left">Од.</th>
-                <th className="px-3 py-2 text-right">План</th>
-                <th className="px-3 py-2 text-right">Факт</th>
-                <th className="px-3 py-2 text-right">%</th>
-                <th className="px-3 py-2"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {funnel.metrics.map((m) => {
-                const fact = sumMetric(funnel.log, m.key)
-                const pct = m.plan_value > 0 ? Math.round((fact / Number(m.plan_value)) * 100) : 0
-                return (
-                  <tr key={m.id} className="hover:bg-muted/10">
-                    <td className="px-3 py-1.5">
-                      <Input
-                        defaultValue={m.label}
-                        className="h-7 text-sm"
-                        onBlur={(e) => {
-                          const v = e.target.value.trim()
-                          if (v && v !== m.label) startTransition(() => updateMetric(m.id, projectId, { label: v }))
-                        }}
-                      />
-                    </td>
-                    <td className="px-3 py-1.5">
-                      <select
-                        defaultValue={m.role}
-                        onChange={(e) =>
-                          startTransition(() => updateMetric(m.id, projectId, { role: e.target.value as MetricRole }))
-                        }
-                        className="h-7 rounded-md border border-input bg-background px-2 text-xs"
-                      >
-                        {(['revenue', 'sales', 'applications', 'traffic_spend', 'other'] as MetricRole[]).map((r) => (
-                          <option key={r} value={r}>
-                            {ROLE_LABEL[r]}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="px-3 py-1.5">
-                      <Input
-                        defaultValue={m.unit ?? ''}
-                        className="h-7 w-16 text-sm"
-                        placeholder="—"
-                        onBlur={(e) => {
-                          const v = e.target.value.trim()
-                          if (v !== (m.unit ?? '')) startTransition(() => updateMetric(m.id, projectId, { unit: v || null }))
-                        }}
-                      />
-                    </td>
-                    <td className="px-3 py-1.5 text-right">
-                      <Input
-                        type="number"
-                        step="any"
-                        defaultValue={Number(m.plan_value) || ''}
-                        className="ml-auto h-7 w-28 text-right text-sm"
-                        onBlur={(e) => {
-                          const v = Number(e.target.value) || 0
-                          if (v !== Number(m.plan_value)) startTransition(() => updateMetric(m.id, projectId, { plan_value: v }))
-                        }}
-                      />
-                    </td>
-                    <td className="px-3 py-1.5 text-right font-medium">{fmt(fact)}</td>
-                    <td className="px-3 py-1.5 text-right text-xs text-muted-foreground">
-                      {m.plan_value > 0 ? `${pct}%` : '—'}
-                    </td>
-                    <td className="px-3 py-1.5 text-right">
-                      <button
-                        type="button"
-                        className="text-muted-foreground hover:text-destructive"
-                        onClick={() => {
-                          if (confirm(`Видалити метрику «${m.label}»? Видаляться і її дневні значення.`))
-                            startTransition(() => deleteMetric(m.id, projectId))
-                        }}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+      {/* Параметри трафіку (якщо включений трафік) */}
+      {funnel.traffic_enabled ? (
+        <div className="rounded-md border bg-card/40 p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-sm font-medium">Параметри трафіку</div>
+            <div className="flex flex-wrap gap-1">
+              {trafficLeft.map((tf) => (
+                <Button
+                  key={tf.key}
+                  size="xs"
+                  variant="ghost"
+                  onClick={() =>
+                    startTransition(() =>
+                      addTrafficField({
+                        funnel_id: funnel.id,
+                        project_id: projectId,
+                        key: tf.key,
+                        label: tf.label,
+                        role: tf.role === 'traffic_spend' ? 'traffic_spend' : 'other',
+                        unit: tf.unit ?? undefined,
+                      }),
+                    )
+                  }
+                >
+                  + {tf.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+          {hasTraffic ? (
+            <StageMetricsTable metrics={stages.find((s) => s.stage_group === 'traffic')!.metrics} log={funnel.log} projectId={projectId} />
+          ) : (
+            <p className="text-xs text-muted-foreground">Додай хоча б «Витрачено».</p>
+          )}
         </div>
+      ) : null}
+
+      {/* Етапи воронки (крім трафіку) */}
+      {stages.filter((s) => s.stage_group !== 'traffic').length === 0 ? (
+        <p className="text-sm text-muted-foreground">Етапів немає. Додай з бібліотеки.</p>
+      ) : (
+        stages
+          .filter((s) => s.stage_group !== 'traffic')
+          .map((s) => (
+            <div key={s.stage_group} className="rounded-md border bg-card/40 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="text-sm font-medium">{s.label}</div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (confirm(`Видалити етап «${s.label}»?`)) {
+                      startTransition(() => deleteStage(funnel.id, projectId, s.stage_group))
+                    }
+                  }}
+                  className="text-muted-foreground hover:text-destructive"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <StageMetricsTable metrics={s.metrics} log={funnel.log} projectId={projectId} />
+            </div>
+          ))
       )}
 
-      <div className="flex flex-wrap gap-1 pt-1">
-        <span className="self-center text-xs text-muted-foreground">Швидке додавання:</span>
-        {QUICK_METRICS.filter((q) => !existingKeys.has(q.key)).map((q) => (
-          <Button
-            key={q.key}
-            size="xs"
-            variant="ghost"
-            onClick={() =>
-              startTransition(() => {
-                void addMetric({
-                  funnel_id: funnel.id,
-                  project_id: projectId,
-                  key: q.key,
-                  label: q.label,
-                  role: q.role,
-                  unit: q.unit,
-                  plan_value: 0,
-                })
-              })
-            }
-          >
-            + {q.label}
-          </Button>
-        ))}
-      </div>
-
-      <AddMetricDialog funnelId={funnel.id} projectId={projectId} open={addOpen} onOpenChange={setAddOpen} existingKeys={existingKeys} />
+      <LibraryDialog funnelId={funnel.id} projectId={projectId} existingGroups={new Set(stages.map((s) => s.stage_group.replace(/_(\d+)$/, '')))} open={libOpen} onOpenChange={setLibOpen} />
     </div>
   )
 }
 
-function AddMetricDialog({
+function StageMetricsTable({
+  metrics,
+  log,
+  projectId,
+}: {
+  metrics: FunnelMetric[]
+  log: FunnelDailyLog[]
+  projectId: string
+}) {
+  const [, startTransition] = useTransition()
+  return (
+    <div className="overflow-hidden rounded-md border bg-background">
+      <table className="w-full text-sm">
+        <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+          <tr>
+            <th className="px-3 py-1.5 text-left">Метрика</th>
+            <th className="px-3 py-1.5 text-left">Од.</th>
+            <th className="px-3 py-1.5 text-right">План</th>
+            <th className="px-3 py-1.5 text-right">Факт</th>
+            <th className="px-3 py-1.5 text-right">%</th>
+            <th className="px-3 py-1.5"></th>
+          </tr>
+        </thead>
+        <tbody className="divide-y">
+          {metrics.map((m) => {
+            const fact = metricFact(m, log)
+            const pct = m.plan_value > 0 ? Math.round((fact / Number(m.plan_value)) * 100) : 0
+            const isComputed = Boolean(m.computed_from && m.computed_from.length > 0)
+            return (
+              <tr key={m.id} className="hover:bg-muted/10">
+                <td className="px-3 py-1">
+                  <span className="text-sm">{m.label}</span>
+                  {isComputed ? <Badge variant="secondary" className="ml-2 text-[10px]">авто</Badge> : null}
+                </td>
+                <td className="px-3 py-1 text-xs text-muted-foreground">{m.unit ?? '—'}</td>
+                <td className="px-3 py-1 text-right">
+                  <Input
+                    type="number"
+                    step="any"
+                    defaultValue={Number(m.plan_value) || ''}
+                    className="ml-auto h-7 w-24 text-right text-sm"
+                    onBlur={(e) => {
+                      const v = Number(e.target.value) || 0
+                      if (v !== Number(m.plan_value)) startTransition(() => updateMetric(m.id, projectId, { plan_value: v }))
+                    }}
+                  />
+                </td>
+                <td className="px-3 py-1 text-right font-medium">{fmt(fact)}</td>
+                <td className="px-3 py-1 text-right text-xs text-muted-foreground">
+                  {m.plan_value > 0 ? `${pct}%` : '—'}
+                </td>
+                <td className="px-3 py-1 text-right">
+                  {!isComputed ? (
+                    <button
+                      type="button"
+                      className="text-muted-foreground hover:text-destructive"
+                      onClick={() => {
+                        if (confirm(`Видалити метрику «${m.label}»?`)) startTransition(() => deleteMetric(m.id, projectId))
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  ) : null}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function LibraryDialog({
   funnelId,
   projectId,
+  existingGroups,
   open,
   onOpenChange,
-  existingKeys,
 }: {
   funnelId: string
   projectId: string
+  existingGroups: Set<string> // ключі без варіанта
   open: boolean
   onOpenChange: (o: boolean) => void
-  existingKeys: Set<string>
 }) {
   const [, startTransition] = useTransition()
-  const [label, setLabel] = useState('')
-  const [key, setKey] = useState('')
-  const [role, setRole] = useState<MetricRole>('other')
-  const [unit, setUnit] = useState('')
-  const [plan, setPlan] = useState('')
-  const [err, setErr] = useState<string | null>(null)
-
-  function autoKey(lbl: string) {
-    return lbl
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '_')
-      .replace(/^_+|_+$/g, '')
-      .slice(0, 40) || 'metric'
-  }
+  const grouped = useMemo(() => {
+    const m = new Map<StageGroup, StageTemplate[]>()
+    for (const tpl of STAGE_LIBRARY) {
+      if (!m.has(tpl.group)) m.set(tpl.group, [])
+      m.get(tpl.group)!.push(tpl)
+    }
+    return m
+  }, [])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Нова метрика</DialogTitle>
+          <DialogTitle>Бібліотека етапів</DialogTitle>
         </DialogHeader>
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <Label className="text-xs">Назва</Label>
-            <Input
-              value={label}
-              onChange={(e) => {
-                setLabel(e.target.value)
-                if (!key) setKey(autoKey(e.target.value))
-              }}
-              placeholder="Наприклад: Перегляди, Прогрії, Бронювання…"
-              autoFocus
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Ключ (латиницею)</Label>
-              <Input value={key} onChange={(e) => setKey(e.target.value.toLowerCase())} placeholder="custom_metric" />
+        <div className="space-y-4">
+          {(['entry', 'warmup', 'qualification', 'payment', 'special'] as StageGroup[]).map((g) => (
+            <div key={g}>
+              <div className="mb-1 text-xs font-medium uppercase text-muted-foreground">{STAGE_GROUP_LABEL[g]}</div>
+              <div className="grid gap-1">
+                {(grouped.get(g) ?? []).map((tpl) => {
+                  const isMultiple = (tpl.variants ?? 1) > 1
+                  const isExisting = existingGroups.has(tpl.template) && !isMultiple
+                  return (
+                    <button
+                      key={tpl.template}
+                      type="button"
+                      disabled={isExisting}
+                      onClick={() =>
+                        startTransition(async () => {
+                          await addStageFromTemplate(funnelId, projectId, tpl.template)
+                          onOpenChange(false)
+                        })
+                      }
+                      className={cn(
+                        'flex items-start justify-between rounded-md border p-2 text-left text-sm transition-colors',
+                        isExisting
+                          ? 'cursor-not-allowed opacity-50'
+                          : 'hover:border-foreground/40 hover:bg-muted/40',
+                      )}
+                    >
+                      <div>
+                        <div className="font-medium">{tpl.label}</div>
+                        {tpl.hint ? <div className="text-xs text-muted-foreground">{tpl.hint}</div> : null}
+                        <div className="mt-0.5 text-[11px] text-muted-foreground">
+                          {tpl.metrics.length} метрик{tpl.metrics.length > 1 ? 'и' : 'а'}
+                          {isMultiple ? ` · до ${tpl.variants} разів` : ''}
+                        </div>
+                      </div>
+                      {isExisting ? <span className="text-xs text-muted-foreground">✓ уже додано</span> : <Plus className="h-4 w-4 self-center text-muted-foreground" />}
+                    </button>
+                  )
+                })}
+              </div>
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Од. виміру</Label>
-              <Input value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="$ / шт / %" />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Роль (для агрегатів)</Label>
-              <select
-                value={role}
-                onChange={(e) => setRole(e.target.value as MetricRole)}
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-              >
-                {(['other', 'revenue', 'sales', 'applications', 'traffic_spend'] as MetricRole[]).map((r) => (
-                  <option key={r} value={r}>
-                    {ROLE_LABEL[r]}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">План</Label>
-              <Input type="number" step="any" value={plan} onChange={(e) => setPlan(e.target.value)} />
-            </div>
-          </div>
-          {err ? <p className="text-xs text-destructive">{err}</p> : null}
+          ))}
         </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Відміна
-          </Button>
-          <Button
-            disabled={!label.trim() || !key.trim()}
-            onClick={() => {
-              if (existingKeys.has(key)) {
-                setErr(`Ключ «${key}» вже є в цій воронці`)
-                return
-              }
-              startTransition(async () => {
-                const res = await addMetric({
-                  funnel_id: funnelId,
-                  project_id: projectId,
-                  key: key.trim(),
-                  label: label.trim(),
-                  role,
-                  unit: unit.trim() || undefined,
-                  plan_value: Number(plan) || 0,
-                })
-                if (res?.error) {
-                  setErr(res.error)
-                } else {
-                  setLabel('')
-                  setKey('')
-                  setUnit('')
-                  setPlan('')
-                  setRole('other')
-                  setErr(null)
-                  onOpenChange(false)
-                }
-              })
-            }}
-          >
-            Додати
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   )
@@ -884,22 +972,23 @@ function FunnelLog({
   month: number
 }) {
   const [, startTransition] = useTransition()
-  const metrics = funnel.metrics
+  // В журнале только редактируемые метрики (не computed)
+  const editableMetrics = funnel.metrics.filter((m) => !(m.computed_from && m.computed_from.length > 0))
 
   const draftInit = useMemo(
     () => ({
       day: dayIso(year, month, new Date().getUTCDate()),
-      values: Object.fromEntries(metrics.map((m) => [m.key, ''])) as Record<string, string>,
+      values: Object.fromEntries(editableMetrics.map((m) => [m.key, ''])) as Record<string, string>,
       comment: '',
     }),
-    [metrics, year, month],
+    [editableMetrics, year, month],
   )
   const [draft, setDraft] = useState(draftInit)
 
   const submitDraft = () => {
-    if (metrics.length === 0) return
+    if (editableMetrics.length === 0) return
     const vals: Record<string, number> = {}
-    for (const m of metrics) {
+    for (const m of editableMetrics) {
       const v = Number(draft.values[m.key])
       if (Number.isFinite(v) && v !== 0) vals[m.key] = v
     }
@@ -912,8 +1001,8 @@ function FunnelLog({
   return (
     <div className="space-y-2">
       <div className="text-sm font-medium">Щоденний журнал</div>
-      {metrics.length === 0 ? (
-        <p className="text-xs text-muted-foreground">Додай метрики вище — і тут зʼявиться журнал.</p>
+      {editableMetrics.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Додай етапи з бібліотеки — і тут зʼявиться журнал.</p>
       ) : (
         <div className="overflow-x-auto rounded-md border">
           <table className="w-full text-sm">
@@ -921,7 +1010,7 @@ function FunnelLog({
               <tr>
                 <th className="px-2 py-2 text-left">Дата</th>
                 <th className="px-2 py-2 text-left">День</th>
-                {metrics.map((m) => (
+                {editableMetrics.map((m) => (
                   <th key={m.id} className="px-2 py-2 text-right">
                     {m.label}
                     {m.unit ? <span className="ml-1 text-[10px] text-muted-foreground">({m.unit})</span> : null}
@@ -933,9 +1022,8 @@ function FunnelLog({
             </thead>
             <tbody className="divide-y">
               {funnel.log.map((row) => (
-                <LogRow key={row.id} row={row} metrics={metrics} funnelId={funnel.id} projectId={projectId} />
+                <LogRow key={row.id} row={row} metrics={editableMetrics} funnelId={funnel.id} projectId={projectId} />
               ))}
-              {/* Draft row */}
               <tr className="bg-muted/20">
                 <td className="px-2 py-1">
                   <Input
@@ -946,15 +1034,13 @@ function FunnelLog({
                   />
                 </td>
                 <td className="px-2 py-1 text-xs text-muted-foreground">{dayOfWeek(draft.day)}</td>
-                {metrics.map((m) => (
+                {editableMetrics.map((m) => (
                   <td key={m.id} className="px-2 py-1">
                     <Input
                       type="number"
                       step="any"
                       value={draft.values[m.key] ?? ''}
-                      onChange={(e) =>
-                        setDraft((s) => ({ ...s, values: { ...s.values, [m.key]: e.target.value } }))
-                      }
+                      onChange={(e) => setDraft((s) => ({ ...s, values: { ...s.values, [m.key]: e.target.value } }))}
                       className="h-7 text-right text-xs"
                     />
                   </td>
@@ -967,9 +1053,7 @@ function FunnelLog({
                   />
                 </td>
                 <td className="px-2 py-1 text-right">
-                  <Button size="sm" onClick={submitDraft}>
-                    +
-                  </Button>
+                  <Button size="sm" onClick={submitDraft}>+</Button>
                 </td>
               </tr>
             </tbody>
@@ -1075,9 +1159,7 @@ function BlockD({ projectId, tracker }: { projectId: string; tracker: MonthlyTra
             >
               <option value="">— не вказано —</option>
               {(['on_time', 'partial', 'failed'] as LaunchStatus[]).map((s) => (
-                <option key={s} value={s}>
-                  {LAUNCH_STATUS_LABEL[s]}
-                </option>
+                <option key={s} value={s}>{LAUNCH_STATUS_LABEL[s]}</option>
               ))}
             </select>
           </div>

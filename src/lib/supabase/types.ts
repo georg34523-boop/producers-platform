@@ -111,8 +111,11 @@ export interface Funnel {
   id: string
   tracker_id: string
   name: string
+  funnel_type: string | null
   is_mini_product: boolean
   product_id: string | null
+  traffic_enabled: boolean
+  traffic_channel: string | null
   position: number
   created_at: string
 }
@@ -137,6 +140,8 @@ export interface FunnelMetric {
   unit: string | null
   plan_value: number
   position: number
+  stage_group: string | null
+  computed_from: string[] | null
   created_at: string
 }
 

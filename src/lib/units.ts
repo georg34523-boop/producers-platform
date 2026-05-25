@@ -117,15 +117,49 @@ export function computeUnits(input: UnitsInput): UnitsResult {
   const { project, products, funnels, expenses, returns, from, to } = input
   const productById = new Map(products.map((p) => [p.id, p]))
 
+  // Помічники для нової формули виручки воронки
+  const isMiniPaymentStage = (sg: string | null) =>
+    sg !== null && sg.startsWith('mini_payment')
+  const isMainPaymentStage = (sg: string | null) =>
+    sg !== null && sg.startsWith('payment')
+
   const funnelAgg = funnels.map((f) => {
-    const revM = metricByRole(f.metrics, 'revenue')
-    const salesM = metricByRole(f.metrics, 'sales')
-    const trafM = metricByRole(f.metrics, 'traffic_spend')
+    const mainRevenue = f.metrics
+      .filter((m) => m.role === 'revenue' && isMainPaymentStage(m.stage_group))
+      .reduce((s, m) => s + sumMetricInRange(m, f.log, from, to), 0)
+    const miniRevenue = f.metrics
+      .filter((m) => m.role === 'revenue' && isMiniPaymentStage(m.stage_group))
+      .reduce((s, m) => s + sumMetricInRange(m, f.log, from, to), 0)
+    const trafficSpend = f.metrics
+      .filter((m) => m.role === 'traffic_spend')
+      .reduce((s, m) => s + sumMetricInRange(m, f.log, from, to), 0)
+    const salesCount = f.metrics
+      .filter((m) => m.role === 'sales' && isMainPaymentStage(m.stage_group))
+      .reduce((s, m) => s + sumMetricInRange(m, f.log, from, to), 0)
+    const hasMini = f.metrics.some((m) => isMiniPaymentStage(m.stage_group))
+
+    // Нова формула: revenue = main + (hasMini ? (mini - traffic) : 0)
+    // Якщо воронка лише міні (без main) — revenue = mini - traffic
+    const hasMain = f.metrics.some((m) => isMainPaymentStage(m.stage_group))
+    let revenue: number
+    if (hasMain && hasMini) {
+      revenue = mainRevenue + (miniRevenue - trafficSpend)
+    } else if (hasMain) {
+      revenue = mainRevenue
+    } else if (hasMini) {
+      revenue = miniRevenue - trafficSpend
+    } else {
+      revenue = mainRevenue + miniRevenue // fallback
+    }
+
     return {
       ...f,
-      revenue: sumMetricInRange(revM, f.log, from, to),
-      sales_count: sumMetricInRange(salesM, f.log, from, to),
-      traffic: sumMetricInRange(trafM, f.log, from, to),
+      revenue,
+      mainRevenue,
+      miniRevenue,
+      sales_count: salesCount,
+      traffic: trafficSpend,
+      hasMini,
     }
   })
 
@@ -137,14 +171,9 @@ export function computeUnits(input: UnitsInput): UnitsResult {
     returnsByProduct.set(r.product_id, (returnsByProduct.get(r.product_id) ?? 0) + Number(r.amount))
   }
 
-  let effectiveRevenue = 0
-  for (const f of funnelAgg) {
-    if (project.work_model === 'rev_70_30' && f.is_mini_product) {
-      if (f.revenue - f.traffic > 0) effectiveRevenue += f.revenue
-    } else {
-      effectiveRevenue += f.revenue
-    }
-  }
+  // Нова формула: ефективна виручка = сума revenue по всіх воронках (з урахуванням
+  // нюанса мини-продукта вже всередині per-funnel revenue). Окремих умов про "в плюс / не в плюс" нема.
+  let effectiveRevenue = funnelAgg.reduce((s, f) => s + f.revenue, 0)
   effectiveRevenue = Math.max(0, effectiveRevenue - totalReturns)
 
   const gross = funnelAgg.reduce((s, f) => s + f.revenue, 0) - totalReturns
@@ -164,26 +193,32 @@ export function computeUnits(input: UnitsInput): UnitsResult {
   const romi = adSpend > 0 ? (gross - adSpend) / adSpend : 0
   const drr = gross > 0 ? adSpend / gross : 0
 
-  // Разрез выручки по продуктам
+  // Разрез выручки по продуктам:
+  //  - main_revenue → привʼязаний продукт (або «без привʼязки»)
+  //  - mini_revenue → «Мини-продукти в воронках» (агрегована)
   const productRevMap = new Map<string, { qty: number; revenue: number }>()
   let miniAgg: { qty: number; revenue: number } | null = null
   let unassigned: { qty: number; revenue: number } | null = null
 
   for (const f of funnelAgg) {
-    if (f.revenue === 0 && f.sales_count === 0) continue
-    if (f.is_mini_product) {
+    if (f.mainRevenue !== 0 || f.sales_count !== 0) {
+      if (f.product_id) {
+        const cur = productRevMap.get(f.product_id) ?? { qty: 0, revenue: 0 }
+        cur.qty += f.sales_count
+        cur.revenue += f.mainRevenue
+        productRevMap.set(f.product_id, cur)
+      } else if (!f.is_mini_product) {
+        if (!unassigned) unassigned = { qty: 0, revenue: 0 }
+        unassigned.qty += f.sales_count
+        unassigned.revenue += f.mainRevenue
+      }
+    }
+    if (f.miniRevenue !== 0) {
       if (!miniAgg) miniAgg = { qty: 0, revenue: 0 }
-      miniAgg.qty += f.sales_count
-      miniAgg.revenue += f.revenue
-    } else if (f.product_id) {
-      const cur = productRevMap.get(f.product_id) ?? { qty: 0, revenue: 0 }
-      cur.qty += f.sales_count
-      cur.revenue += f.revenue
-      productRevMap.set(f.product_id, cur)
-    } else {
-      if (!unassigned) unassigned = { qty: 0, revenue: 0 }
-      unassigned.qty += f.sales_count
-      unassigned.revenue += f.revenue
+      // Кількість окремо не агрегуємо (sales role у міні-етапу = кількість оплат міні)
+      const miniSalesM = f.metrics.find((m) => m.role === 'sales' && m.stage_group?.startsWith('mini_payment'))
+      if (miniSalesM) miniAgg.qty += sumMetricInRange(miniSalesM, f.log, from, to)
+      miniAgg.revenue += f.miniRevenue
     }
   }
   for (const [pid, retAmount] of returnsByProduct) {
