@@ -1313,12 +1313,10 @@ function HistoryDialog({
 }) {
   const today = useMemo(() => new Date(), [])
   const todayIso = useMemo(() => today.toISOString().slice(0, 10), [today])
-  const [preset, setPreset] = useState<RangePreset>('month')
+  const [preset, setPreset] = useState<RangePreset>('all')
   const [customFrom, setCustomFrom] = useState<string>(todayIso)
   const [customTo, setCustomTo] = useState<string>(todayIso)
-  const [selectedMetric, setSelectedMetric] = useState<string>(editableMetrics[0]?.key ?? '')
 
-  // Обчислюємо діапазон
   const { from, to } = useMemo(() => {
     if (preset === 'all') return { from: '0000-01-01', to: '9999-12-31' }
     if (preset === 'custom') return { from: customFrom, to: customTo }
@@ -1328,7 +1326,6 @@ function HistoryDialog({
       start.setUTCDate(d.getUTCDate() - 6)
       return { from: start.toISOString().slice(0, 10), to: d.toISOString().slice(0, 10) }
     }
-    // month
     const start = new Date(d)
     start.setUTCDate(1)
     return { from: start.toISOString().slice(0, 10), to: d.toISOString().slice(0, 10) }
@@ -1341,19 +1338,34 @@ function HistoryDialog({
     [funnel.metrics, funnel.log, from, to],
   )
 
-  // Дані для графіка: серія {day_date, value} вибраної метрики
-  const selM = editableMetrics.find((m) => m.key === selectedMetric)
-  const series = useMemo(() => {
-    if (!selM) return [] as { day: string; value: number }[]
-    return [...filteredLog]
-      .sort((a, b) => a.day_date.localeCompare(b.day_date))
-      .map((r) => ({ day: r.day_date, value: Number(r.values?.[selM.key]) || 0 }))
-  }, [filteredLog, selM])
-  const total = series.reduce((s, p) => s + p.value, 0)
+  // Сортування за потоком
+  const orderedMetrics = useMemo(() => {
+    return [...editableMetrics].sort((a, b) => {
+      const pa = stageFlowPriority(a.stage_group ?? 'other')
+      const pb = stageFlowPriority(b.stage_group ?? 'other')
+      if (pa !== pb) return pa - pb
+      return a.position - b.position
+    })
+  }, [editableMetrics])
+
+  // По кожній метриці: серія днів + сумма / макс
+  const seriesByMetric = useMemo(() => {
+    const out = new Map<string, { series: { day: string; value: number }[]; total: number; peak: number }>()
+    const sortedLog = [...filteredLog].sort((a, b) => a.day_date.localeCompare(b.day_date))
+    for (const m of orderedMetrics) {
+      const series = sortedLog
+        .map((r) => ({ day: r.day_date, value: Number(r.values?.[m.key]) || 0 }))
+        .filter((p) => p.value !== 0)
+      const total = series.reduce((s, p) => s + p.value, 0)
+      const peak = series.reduce((mx, p) => (p.value > mx ? p.value : mx), 0)
+      out.set(m.key, { series, total, peak })
+    }
+    return out
+  }, [orderedMetrics, filteredLog])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-5xl">
+      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-6xl">
         <DialogHeader>
           <DialogTitle>Історія — {funnel.name}</DialogTitle>
         </DialogHeader>
@@ -1380,79 +1392,78 @@ function HistoryDialog({
               <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="h-7 w-36" />
             </div>
           ) : null}
-          <span className="ml-auto text-xs text-muted-foreground">
-            {filteredLog.length} записів
-          </span>
+          <span className="ml-auto text-xs text-muted-foreground">{filteredLog.length} записів</span>
         </div>
 
         {/* Автоматичні розрахунки за період */}
         {derived.length > 0 ? (
-          <div className="grid gap-2 sm:grid-cols-4 lg:grid-cols-6">
-            {derived.map((d) => (
-              <div key={d.key} className="rounded-md border bg-card/40 p-2">
-                <div className="text-[10px] uppercase text-muted-foreground">{d.label}</div>
-                <div className="text-sm font-medium">
-                  {fmt(d.value)}
-                  {d.unit ? <span className="ml-0.5 text-xs text-muted-foreground">{d.unit}</span> : null}
+          <div>
+            <div className="mb-1.5 text-xs font-medium text-muted-foreground">Автоматичні розрахунки за період</div>
+            <div className="grid gap-2 sm:grid-cols-4 lg:grid-cols-6">
+              {derived.map((d) => (
+                <div key={d.key} className="rounded-md border bg-card/40 p-2">
+                  <div className="text-[10px] uppercase text-muted-foreground">{d.label}</div>
+                  <div className="text-sm font-medium">
+                    {fmt(d.value)}
+                    {d.unit ? <span className="ml-0.5 text-xs text-muted-foreground">{d.unit}</span> : null}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        ) : null}
-
-        {/* Графік однієї метрики */}
-        {editableMetrics.length > 0 ? (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-medium">Графік по днях</div>
-              <select
-                value={selectedMetric}
-                onChange={(e) => setSelectedMetric(e.target.value)}
-                className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-              >
-                {editableMetrics.map((m) => (
-                  <option key={m.key} value={m.key}>{m.label}</option>
-                ))}
-              </select>
-            </div>
-            {series.length === 0 ? (
-              <p className="py-6 text-center text-xs text-muted-foreground">Немає даних за період</p>
-            ) : (
-              <LineChart data={series} label={selM?.label ?? ''} unit={selM?.unit ?? ''} />
-            )}
-            <div className="text-xs text-muted-foreground">
-              Сума за період: <strong className="text-foreground">{fmt(total)}</strong>
-              {selM?.unit ? ` ${selM.unit}` : null}
+              ))}
             </div>
           </div>
         ) : null}
 
-        {/* Таблиця по днях (read-only inline edit) */}
+        {/* Всі метрики як міні-графіки */}
+        {orderedMetrics.length > 0 ? (
+          <div>
+            <div className="mb-1.5 text-xs font-medium text-muted-foreground">Метрики по днях</div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {orderedMetrics.map((m) => {
+                const s = seriesByMetric.get(m.key)
+                return (
+                  <MetricMiniChart
+                    key={m.id}
+                    label={m.label}
+                    unit={m.unit}
+                    series={s?.series ?? []}
+                    total={s?.total ?? 0}
+                    peak={s?.peak ?? 0}
+                  />
+                )
+              })}
+            </div>
+          </div>
+        ) : null}
+
+        {/* Таблиця по днях */}
         {filteredLog.length > 0 ? (
-          <div className="overflow-x-auto rounded-md border">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
-                <tr>
-                  <th className="px-2 py-2 text-left">Дата</th>
-                  <th className="px-2 py-2 text-left">День</th>
-                  {editableMetrics.map((m) => (
-                    <th key={m.id} className="px-2 py-2 text-right">
-                      {m.label}
-                      {m.unit ? <span className="ml-1 text-[10px] text-muted-foreground">({m.unit})</span> : null}
-                    </th>
-                  ))}
-                  <th className="px-2 py-2 text-left">Коментар</th>
-                  <th className="px-2 py-2"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {[...filteredLog]
-                  .sort((a, b) => b.day_date.localeCompare(a.day_date))
-                  .map((row) => (
-                    <LogRow key={row.id} row={row} metrics={editableMetrics} funnelId={funnel.id} projectId={projectId} />
-                  ))}
-              </tbody>
-            </table>
+          <div>
+            <div className="mb-1.5 text-xs font-medium text-muted-foreground">Таблиця</div>
+            <div className="overflow-x-auto rounded-md border">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+                  <tr>
+                    <th className="px-2 py-2 text-left">Дата</th>
+                    <th className="px-2 py-2 text-left">День</th>
+                    {orderedMetrics.map((m) => (
+                      <th key={m.id} className="px-2 py-2 text-right">
+                        {m.label}
+                        {m.unit ? <span className="ml-1 text-[10px] text-muted-foreground">({m.unit})</span> : null}
+                      </th>
+                    ))}
+                    <th className="px-2 py-2 text-left">Коментар</th>
+                    <th className="px-2 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {[...filteredLog]
+                    .sort((a, b) => b.day_date.localeCompare(a.day_date))
+                    .map((row) => (
+                      <LogRow key={row.id} row={row} metrics={orderedMetrics} funnelId={funnel.id} projectId={projectId} />
+                    ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         ) : null}
       </DialogContent>
@@ -1460,43 +1471,55 @@ function HistoryDialog({
   )
 }
 
-function LineChart({ data, label, unit }: { data: { day: string; value: number }[]; label: string; unit: string }) {
-  if (data.length === 0) return null
-  const W = 600
-  const H = 140
-  const padX = 28
-  const padY = 12
-  const maxV = Math.max(...data.map((d) => d.value), 1)
-  const stepX = data.length > 1 ? (W - padX * 2) / (data.length - 1) : 0
-  const points = data.map((d, i) => {
+function MetricMiniChart({
+  label,
+  unit,
+  series,
+  total,
+  peak,
+}: {
+  label: string
+  unit: string | null
+  series: { day: string; value: number }[]
+  total: number
+  peak: number
+}) {
+  const W = 200
+  const H = 50
+  const padX = 4
+  const padY = 4
+  const maxV = peak > 0 ? peak : 1
+  const stepX = series.length > 1 ? (W - padX * 2) / (series.length - 1) : 0
+  const points = series.map((d, i) => {
     const x = padX + i * stepX
     const y = padY + (H - padY * 2) * (1 - d.value / maxV)
-    return { x, y, v: d.value, day: d.day }
+    return { x, y }
   })
   const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ')
 
   return (
-    <div className="overflow-x-auto rounded-md border bg-card/40 p-3">
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
-        <title>{label}</title>
-        {/* baseline */}
-        <line x1={padX} y1={H - padY} x2={W - padX} y2={H - padY} stroke="currentColor" className="text-muted-foreground/30" />
-        {/* max line */}
-        <line x1={padX} y1={padY} x2={W - padX} y2={padY} stroke="currentColor" className="text-muted-foreground/10" strokeDasharray="3 3" />
-        <text x={padX} y={padY - 2} className="fill-muted-foreground text-[10px]">{maxV.toLocaleString('ru-RU')}{unit ? ` ${unit}` : ''}</text>
-        <path d={path} fill="none" stroke="currentColor" strokeWidth={2} className="text-foreground/80" />
-        {points.map((p, i) => (
-          <g key={i}>
-            <circle cx={p.x} cy={p.y} r={3} className="fill-foreground" />
-            {/* x label every Nth */}
-            {i === 0 || i === points.length - 1 || (points.length > 4 && i === Math.floor(points.length / 2)) ? (
-              <text x={p.x} y={H - 2} textAnchor="middle" className="fill-muted-foreground text-[9px]">
-                {new Date(p.day).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}
-              </text>
-            ) : null}
-          </g>
-        ))}
-      </svg>
+    <div className="rounded-md border bg-card/40 p-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="truncate text-xs font-medium">{label}</div>
+        <div className="shrink-0 text-sm font-semibold">
+          {fmt(total)}
+          {unit ? <span className="ml-0.5 text-[10px] text-muted-foreground">{unit}</span> : null}
+        </div>
+      </div>
+      {series.length === 0 ? (
+        <div className="flex h-[50px] items-center justify-center text-[10px] text-muted-foreground">немає даних</div>
+      ) : (
+        <svg viewBox={`0 0 ${W} ${H}`} className="mt-1 w-full">
+          <path d={path} fill="none" stroke="currentColor" strokeWidth={1.5} className="text-foreground/70" />
+          {points.map((p, i) => (
+            <circle key={i} cx={p.x} cy={p.y} r={1.5} className="fill-foreground" />
+          ))}
+        </svg>
+      )}
+      <div className="mt-0.5 text-[10px] text-muted-foreground">
+        Пік: {fmt(peak)}
+        {unit ? ` ${unit}` : ''}
+      </div>
     </div>
   )
 }
