@@ -17,6 +17,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { computeDerivedMetrics, computeStageConversions } from '@/lib/funnel-derived'
 import {
   FUNNEL_DEFAULTS,
   FUNNEL_TYPE_HINT,
@@ -30,6 +31,7 @@ import {
   TRAFFIC_CHANNELS,
   TRAFFIC_FIELDS,
   metricKeyFor,
+  stageFlowPriority,
 } from '@/lib/funnel-library'
 import { LAUNCH_STATUS_LABEL, MONTH_LABEL_RU } from '@/lib/labels'
 import type {
@@ -113,23 +115,27 @@ function metricFact(m: FunnelMetric, log: FunnelDailyLog[]): number {
 }
 
 function groupedByStage(metrics: FunnelMetric[]) {
-  // Возвращает массив { stage_group, label, metrics[] } в порядке position
-  const order: string[] = []
+  // Возвращает массив { stage_group, label, metrics[] }
+  // Порядок: traffic → entry → warmup → qualification → payment → special
   const groups = new Map<string, FunnelMetric[]>()
   for (const m of [...metrics].sort((a, b) => a.position - b.position)) {
     const sg = m.stage_group ?? 'other'
-    if (!groups.has(sg)) {
-      groups.set(sg, [])
-      order.push(sg)
-    }
+    if (!groups.has(sg)) groups.set(sg, [])
     groups.get(sg)!.push(m)
   }
-  return order.map((sg) => {
-    // Имя этапа: для variants 'webinar_2' → 'Вебінар #2'
+  const sgs = [...groups.keys()].sort((a, b) => {
+    const pa = stageFlowPriority(a)
+    const pb = stageFlowPriority(b)
+    if (pa !== pb) return pa - pb
+    // якщо однакові — за position першої метрики
+    return (groups.get(a)![0]?.position ?? 0) - (groups.get(b)![0]?.position ?? 0)
+  })
+  return sgs.map((sg) => {
     const base = sg.replace(/_(\d+)$/, '')
     const variant = sg.match(/_(\d+)$/)?.[1]
     const tpl = getStageTemplate(base)
-    const label = tpl ? (variant ? `${tpl.label} #${variant}` : tpl.label) : sg
+    let label = tpl ? (variant ? `${tpl.label} #${variant}` : tpl.label) : sg
+    if (sg === 'traffic') label = 'Трафік'
     return { stage_group: sg, label, metrics: groups.get(sg)! }
   })
 }
@@ -664,8 +670,51 @@ function FunnelDetail({
   return (
     <div className="space-y-5">
       <FunnelSettings funnel={funnel} projectId={projectId} products={products} />
+      <DerivedStats funnel={funnel} />
       <FunnelStages funnel={funnel} projectId={projectId} />
       <FunnelLog funnel={funnel} projectId={projectId} year={year} month={month} />
+    </div>
+  )
+}
+
+// Автоматичні розрахункові метрики
+function DerivedStats({ funnel }: { funnel: FullFunnel }) {
+  const derived = useMemo(() => computeDerivedMetrics(funnel.metrics, funnel.log), [funnel])
+  const conversions = useMemo(() => computeStageConversions(funnel.metrics, funnel.log), [funnel])
+
+  if (derived.length === 0 && conversions.length === 0) return null
+
+  return (
+    <div className="rounded-md border bg-card/40 p-3">
+      <div className="mb-2 text-sm font-medium">Автоматичні розрахунки</div>
+      {derived.length > 0 ? (
+        <div className="grid gap-2 sm:grid-cols-4 lg:grid-cols-6">
+          {derived.map((d) => (
+            <div key={d.key} className="rounded-md border bg-background px-2 py-1.5">
+              <div className="text-[10px] uppercase text-muted-foreground">{d.label}</div>
+              <div className="text-sm font-medium">
+                {fmt(d.value)}
+                {d.unit ? <span className="ml-0.5 text-xs text-muted-foreground">{d.unit}</span> : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {conversions.length > 0 ? (
+        <div className="mt-3 border-t pt-2">
+          <div className="mb-1 text-xs font-medium text-muted-foreground">Конверсії між етапами</div>
+          <div className="flex flex-wrap gap-2">
+            {conversions.map((c, i) => (
+              <div key={i} className="rounded-md border bg-background px-2 py-1 text-xs">
+                <span className="text-muted-foreground">{c.from_label}</span>
+                <span className="mx-1">→</span>
+                <span className="text-muted-foreground">{c.to_label}</span>
+                <span className="ml-2 font-medium">{fmt(c.value)}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -1247,6 +1296,8 @@ function AddDayDialog({
   )
 }
 
+type RangePreset = 'week' | 'month' | 'all' | 'custom'
+
 function HistoryDialog({
   funnel,
   projectId,
@@ -1260,15 +1311,124 @@ function HistoryDialog({
   open: boolean
   onOpenChange: (o: boolean) => void
 }) {
+  const today = useMemo(() => new Date(), [])
+  const todayIso = useMemo(() => today.toISOString().slice(0, 10), [today])
+  const [preset, setPreset] = useState<RangePreset>('month')
+  const [customFrom, setCustomFrom] = useState<string>(todayIso)
+  const [customTo, setCustomTo] = useState<string>(todayIso)
+  const [selectedMetric, setSelectedMetric] = useState<string>(editableMetrics[0]?.key ?? '')
+
+  // Обчислюємо діапазон
+  const { from, to } = useMemo(() => {
+    if (preset === 'all') return { from: '0000-01-01', to: '9999-12-31' }
+    if (preset === 'custom') return { from: customFrom, to: customTo }
+    const d = new Date()
+    if (preset === 'week') {
+      const start = new Date(d)
+      start.setUTCDate(d.getUTCDate() - 6)
+      return { from: start.toISOString().slice(0, 10), to: d.toISOString().slice(0, 10) }
+    }
+    // month
+    const start = new Date(d)
+    start.setUTCDate(1)
+    return { from: start.toISOString().slice(0, 10), to: d.toISOString().slice(0, 10) }
+  }, [preset, customFrom, customTo])
+
+  const inRange = (d: string) => d >= from && d <= to
+  const filteredLog = useMemo(() => funnel.log.filter((r) => inRange(r.day_date)), [funnel.log, from, to])
+  const derived = useMemo(
+    () => computeDerivedMetrics(funnel.metrics, funnel.log, inRange),
+    [funnel.metrics, funnel.log, from, to],
+  )
+
+  // Дані для графіка: серія {day_date, value} вибраної метрики
+  const selM = editableMetrics.find((m) => m.key === selectedMetric)
+  const series = useMemo(() => {
+    if (!selM) return [] as { day: string; value: number }[]
+    return [...filteredLog]
+      .sort((a, b) => a.day_date.localeCompare(b.day_date))
+      .map((r) => ({ day: r.day_date, value: Number(r.values?.[selM.key]) || 0 }))
+  }, [filteredLog, selM])
+  const total = series.reduce((s, p) => s + p.value, 0)
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-6xl">
+      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-5xl">
         <DialogHeader>
-          <DialogTitle>Історія по днях — {funnel.name}</DialogTitle>
+          <DialogTitle>Історія — {funnel.name}</DialogTitle>
         </DialogHeader>
-        {funnel.log.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">Поки немає записів.</p>
-        ) : (
+
+        {/* Фільтр діапазону */}
+        <div className="flex flex-wrap items-center gap-2 border-b pb-3">
+          {(['week', 'month', 'all', 'custom'] as RangePreset[]).map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => setPreset(p)}
+              className={cn(
+                'rounded-md border px-3 py-1 text-xs transition-colors',
+                preset === p ? 'border-foreground bg-muted' : 'text-muted-foreground hover:bg-muted/30',
+              )}
+            >
+              {p === 'week' ? 'Тиждень' : p === 'month' ? 'Місяць' : p === 'all' ? 'Усе' : 'Custom'}
+            </button>
+          ))}
+          {preset === 'custom' ? (
+            <div className="flex items-center gap-1 text-xs">
+              <Input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="h-7 w-36" />
+              <span>—</span>
+              <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="h-7 w-36" />
+            </div>
+          ) : null}
+          <span className="ml-auto text-xs text-muted-foreground">
+            {filteredLog.length} записів
+          </span>
+        </div>
+
+        {/* Автоматичні розрахунки за період */}
+        {derived.length > 0 ? (
+          <div className="grid gap-2 sm:grid-cols-4 lg:grid-cols-6">
+            {derived.map((d) => (
+              <div key={d.key} className="rounded-md border bg-card/40 p-2">
+                <div className="text-[10px] uppercase text-muted-foreground">{d.label}</div>
+                <div className="text-sm font-medium">
+                  {fmt(d.value)}
+                  {d.unit ? <span className="ml-0.5 text-xs text-muted-foreground">{d.unit}</span> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {/* Графік однієї метрики */}
+        {editableMetrics.length > 0 ? (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-medium">Графік по днях</div>
+              <select
+                value={selectedMetric}
+                onChange={(e) => setSelectedMetric(e.target.value)}
+                className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+              >
+                {editableMetrics.map((m) => (
+                  <option key={m.key} value={m.key}>{m.label}</option>
+                ))}
+              </select>
+            </div>
+            {series.length === 0 ? (
+              <p className="py-6 text-center text-xs text-muted-foreground">Немає даних за період</p>
+            ) : (
+              <LineChart data={series} label={selM?.label ?? ''} unit={selM?.unit ?? ''} />
+            )}
+            <div className="text-xs text-muted-foreground">
+              Сума за період: <strong className="text-foreground">{fmt(total)}</strong>
+              {selM?.unit ? ` ${selM.unit}` : null}
+            </div>
+          </div>
+        ) : null}
+
+        {/* Таблиця по днях (read-only inline edit) */}
+        {filteredLog.length > 0 ? (
           <div className="overflow-x-auto rounded-md border">
             <table className="w-full text-sm">
               <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
@@ -1286,7 +1446,7 @@ function HistoryDialog({
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {[...funnel.log]
+                {[...filteredLog]
                   .sort((a, b) => b.day_date.localeCompare(a.day_date))
                   .map((row) => (
                     <LogRow key={row.id} row={row} metrics={editableMetrics} funnelId={funnel.id} projectId={projectId} />
@@ -1294,9 +1454,50 @@ function HistoryDialog({
               </tbody>
             </table>
           </div>
-        )}
+        ) : null}
       </DialogContent>
     </Dialog>
+  )
+}
+
+function LineChart({ data, label, unit }: { data: { day: string; value: number }[]; label: string; unit: string }) {
+  if (data.length === 0) return null
+  const W = 600
+  const H = 140
+  const padX = 28
+  const padY = 12
+  const maxV = Math.max(...data.map((d) => d.value), 1)
+  const stepX = data.length > 1 ? (W - padX * 2) / (data.length - 1) : 0
+  const points = data.map((d, i) => {
+    const x = padX + i * stepX
+    const y = padY + (H - padY * 2) * (1 - d.value / maxV)
+    return { x, y, v: d.value, day: d.day }
+  })
+  const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ')
+
+  return (
+    <div className="overflow-x-auto rounded-md border bg-card/40 p-3">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
+        <title>{label}</title>
+        {/* baseline */}
+        <line x1={padX} y1={H - padY} x2={W - padX} y2={H - padY} stroke="currentColor" className="text-muted-foreground/30" />
+        {/* max line */}
+        <line x1={padX} y1={padY} x2={W - padX} y2={padY} stroke="currentColor" className="text-muted-foreground/10" strokeDasharray="3 3" />
+        <text x={padX} y={padY - 2} className="fill-muted-foreground text-[10px]">{maxV.toLocaleString('ru-RU')}{unit ? ` ${unit}` : ''}</text>
+        <path d={path} fill="none" stroke="currentColor" strokeWidth={2} className="text-foreground/80" />
+        {points.map((p, i) => (
+          <g key={i}>
+            <circle cx={p.x} cy={p.y} r={3} className="fill-foreground" />
+            {/* x label every Nth */}
+            {i === 0 || i === points.length - 1 || (points.length > 4 && i === Math.floor(points.length / 2)) ? (
+              <text x={p.x} y={H - 2} textAnchor="middle" className="fill-muted-foreground text-[9px]">
+                {new Date(p.day).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}
+              </text>
+            ) : null}
+          </g>
+        ))}
+      </svg>
+    </div>
   )
 }
 

@@ -255,7 +255,7 @@ export const TRAFFIC_FIELDS: TrafficField[] = [
   { key: 'budget_plan', label: 'Бюджет на місяць (план)', role: 'other', unit: '$' },
   { key: 'impressions', label: 'Покази', role: 'other', unit: 'шт' },
   { key: 'clicks', label: 'Кліки', role: 'other', unit: 'шт' },
-  { key: 'landing_cr', label: 'CR сайту', role: 'other', unit: '%' },
+  // CR сайту — рахується автоматично (Анкети / Кліки), не вводиться руками
   // Facebook / рекламний кабінет
   { key: 'fb_purchases', label: 'Покупки FB', role: 'other', unit: 'шт' },
   { key: 'fb_purchase_value', label: 'Сума покупок FB', role: 'other', unit: '$' },
@@ -266,6 +266,23 @@ export const TRAFFIC_FIELDS: TrafficField[] = [
   { key: 'calls_planned', label: 'Дзвінків заплановано', role: 'other', unit: 'шт' },
   { key: 'calls_held', label: 'Дзвінків проведено', role: 'other', unit: 'шт' },
 ]
+
+// ---------- Сортування етапів за потоком ----------
+const GROUP_PRIORITY: Record<StageGroup, number> = {
+  entry: 1,
+  warmup: 2,
+  qualification: 3,
+  payment: 4,
+  special: 5,
+}
+
+/** Повертає priority для stage_group (з префіксом 'traffic' — 0; інакше за шаблоном). */
+export function stageFlowPriority(stageGroup: string): number {
+  if (stageGroup === 'traffic') return 0
+  const base = stageGroup.replace(/_(\d+)$/, '')
+  const tpl = STAGE_LIBRARY.find((s) => s.template === base)
+  return tpl ? GROUP_PRIORITY[tpl.group] : 99
+}
 
 export const TRAFFIC_CHANNELS = [
   'Facebook',
