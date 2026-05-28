@@ -52,6 +52,74 @@ export async function updateTrackerField(
   revalidate(projectId)
 }
 
+// ============================================================
+// Кастомні цілі місяця (custom drivers)
+// ============================================================
+export async function addCustomGoal(
+  trackerId: string,
+  projectId: string,
+  name: string,
+  targetValue: number,
+  unit: string,
+): Promise<void> {
+  await requireProfile()
+  const supabase = await createClient()
+  const { data: last } = await supabase
+    .from('tracker_custom_drivers')
+    .select('position')
+    .eq('tracker_id', trackerId)
+    .order('position', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  await supabase.from('tracker_custom_drivers').insert({
+    tracker_id: trackerId,
+    name,
+    unit: unit || null,
+    plan_value: targetValue,
+    actual_value: 0,
+    position: (last?.position ?? -1) + 1,
+  })
+  revalidate(projectId)
+}
+
+export async function incrementCustomGoal(
+  goalId: string,
+  projectId: string,
+  delta: number,
+): Promise<void> {
+  await requireProfile()
+  const supabase = await createClient()
+  const { data: cur } = await supabase
+    .from('tracker_custom_drivers')
+    .select('actual_value')
+    .eq('id', goalId)
+    .maybeSingle()
+  const next = Math.max(0, Number(cur?.actual_value ?? 0) + delta)
+  await supabase
+    .from('tracker_custom_drivers')
+    .update({ actual_value: next })
+    .eq('id', goalId)
+  revalidate(projectId)
+}
+
+export async function updateCustomGoal(
+  goalId: string,
+  projectId: string,
+  patch: Partial<{ name: string; plan_value: number; actual_value: number; unit: string | null }>,
+): Promise<void> {
+  await requireProfile()
+  const supabase = await createClient()
+  await supabase.from('tracker_custom_drivers').update(patch).eq('id', goalId)
+  revalidate(projectId)
+}
+
+export async function deleteCustomGoal(goalId: string, projectId: string): Promise<void> {
+  await requireProfile()
+  const supabase = await createClient()
+  await supabase.from('tracker_custom_drivers').delete().eq('id', goalId)
+  revalidate(projectId)
+}
+
 export async function setWeeklyPlan(
   trackerId: string,
   projectId: string,
@@ -147,6 +215,35 @@ export async function createFunnel(input: {
   const defaults = FUNNEL_DEFAULTS[parsed.data.funnel_type]
   for (const tplKey of defaults) {
     await addStageInternal(supabase, funnel.id, tplKey, parsed.data.funnel_type)
+  }
+
+  // Авто-додаємо базові метрики трафіку (щоб CR/CPC/CTR могли рахуватися одразу)
+  if (parsed.data.traffic_enabled) {
+    const baseTraffic = [
+      { key: 'spent', label: 'Витрачено', role: 'traffic_spend' as const, unit: '$' },
+      { key: 'impressions', label: 'Покази', role: 'other' as const, unit: 'шт' },
+      { key: 'clicks', label: 'Кліки', role: 'other' as const, unit: 'шт' },
+    ]
+    const { data: lastPos } = await supabase
+      .from('funnel_metrics')
+      .select('position')
+      .eq('funnel_id', funnel.id)
+      .order('position', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    let startPos = (lastPos?.position ?? -1) + 1
+    const rows = baseTraffic.map((t) => ({
+      funnel_id: funnel.id,
+      stage_group: 'traffic',
+      key: metricKeyFor('traffic', t.key),
+      label: t.label,
+      role: t.role,
+      unit: t.unit,
+      plan_value: 0,
+      position: startPos++,
+      computed_from: null,
+    }))
+    await supabase.from('funnel_metrics').insert(rows)
   }
 
   revalidate(parsed.data.project_id)

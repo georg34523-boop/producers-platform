@@ -14,6 +14,8 @@ import {
 import { computeUnits, currentMonthRange } from '@/lib/units'
 import { cn } from '@/lib/utils'
 
+import { CustomGoals } from './custom-goals'
+
 function fmt(n: number): string {
   return n.toLocaleString('ru-RU', { maximumFractionDigits: 0 })
 }
@@ -108,14 +110,9 @@ export default async function ProjectOverviewPage({
           <DriverBox label="Середній чек, $" plan={Number(tracker.avg_check_plan)} actual={avgCheck} />
           <DriverBox label="Анкети" plan={Number(tracker.applications_plan)} actual={applications} />
         </CardContent>
-        {customDrivers.length > 0 ? (
-          <CardContent className="grid gap-3 border-t pt-4 sm:grid-cols-2 lg:grid-cols-4">
-            {customDrivers.map((cd) => (
-              <DriverBox key={cd.id} label={cd.name + (cd.unit ? `, ${cd.unit}` : '')} plan={Number(cd.plan_value)} actual={Number(cd.actual_value)} />
-            ))}
-          </CardContent>
-        ) : null}
       </Card>
+
+      <CustomGoals trackerId={tracker.id} projectId={id} goals={customDrivers} />
 
       <Card>
         <CardHeader>

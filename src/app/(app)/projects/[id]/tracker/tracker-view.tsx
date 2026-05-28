@@ -1165,7 +1165,7 @@ function FunnelLog({
         <div className="text-sm font-medium">Журнал по днях</div>
         <div className="flex gap-2">
           <Button size="sm" variant="outline" disabled={editableMetrics.length === 0} onClick={() => setHistoryOpen(true)}>
-            Історія ({funnel.log.length})
+            Історія
           </Button>
           <Button size="sm" disabled={editableMetrics.length === 0} onClick={() => setAddOpen(true)}>
             <Plus className="mr-1 h-3.5 w-3.5" />
@@ -1382,7 +1382,7 @@ function HistoryDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-6xl">
+      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-[98vw]">
         <DialogHeader>
           <DialogTitle>Історія — {funnel.name}</DialogTitle>
         </DialogHeader>
@@ -1457,26 +1457,25 @@ function HistoryDialog({
           <div>
             <div className="mb-1.5 text-xs font-medium text-muted-foreground">Таблиця</div>
             <div className="overflow-x-auto rounded-md border">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+              <table className="w-full text-xs">
+                <thead className="bg-muted/40 text-[10px] uppercase text-muted-foreground">
                   <tr>
-                    <th className="px-2 py-2 text-left">Дата</th>
-                    <th className="px-2 py-2 text-left">День</th>
+                    <th className="sticky left-0 z-10 bg-muted/40 px-1.5 py-1.5 text-left">Дата</th>
                     {orderedMetrics.map((m) => (
-                      <th key={m.id} className="px-2 py-2 text-right">
-                        {m.label}
-                        {m.unit ? <span className="ml-1 text-[10px] text-muted-foreground">({m.unit})</span> : null}
+                      <th key={m.id} className="px-1.5 py-1.5 text-right">
+                        <div className="truncate">{m.label}</div>
+                        {m.unit ? <div className="text-[9px] normal-case text-muted-foreground">{m.unit}</div> : null}
                       </th>
                     ))}
-                    <th className="px-2 py-2 text-left">Коментар</th>
-                    <th className="px-2 py-2"></th>
+                    <th className="px-1.5 py-1.5 text-left">Коментар</th>
+                    <th className="px-1.5 py-1.5"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
                   {[...filteredLog]
                     .sort((a, b) => b.day_date.localeCompare(a.day_date))
                     .map((row) => (
-                      <LogRow key={row.id} row={row} metrics={orderedMetrics} funnelId={funnel.id} projectId={projectId} />
+                      <CompactLogRow key={row.id} row={row} metrics={orderedMetrics} funnelId={funnel.id} projectId={projectId} />
                     ))}
                 </tbody>
               </table>
@@ -1538,6 +1537,69 @@ function MetricMiniChart({
         {unit ? ` ${unit}` : ''}
       </div>
     </div>
+  )
+}
+
+function CompactLogRow({
+  row,
+  metrics,
+  funnelId,
+  projectId,
+}: {
+  row: FunnelDailyLog
+  metrics: FunnelMetric[]
+  funnelId: string
+  projectId: string
+}) {
+  const [, startTransition] = useTransition()
+  return (
+    <tr className="hover:bg-muted/10">
+      <td className="sticky left-0 z-10 whitespace-nowrap bg-background px-1.5 py-0.5 text-[11px] font-medium">
+        {new Date(row.day_date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}
+        <span className="ml-1 text-muted-foreground">{dayOfWeek(row.day_date)}</span>
+      </td>
+      {metrics.map((m) => (
+        <td key={m.id} className="px-1 py-0.5">
+          <Input
+            type="number"
+            step="any"
+            defaultValue={row.values?.[m.key] ?? ''}
+            onBlur={(e) => {
+              const newV = Number(e.target.value) || 0
+              const oldV = Number(row.values?.[m.key] ?? 0)
+              if (newV !== oldV) {
+                const nextValues = { ...(row.values ?? {}) }
+                if (newV === 0) delete nextValues[m.key]
+                else nextValues[m.key] = newV
+                startTransition(() => upsertDailyLog(funnelId, projectId, row.day_date, nextValues, row.comment))
+              }
+            }}
+            className="h-6 w-16 px-1 text-right text-[11px]"
+          />
+        </td>
+      ))}
+      <td className="px-1 py-0.5">
+        <Input
+          defaultValue={row.comment ?? ''}
+          onBlur={(e) => {
+            const v = e.target.value
+            if (v !== (row.comment ?? '')) startTransition(() => upsertDailyLog(funnelId, projectId, row.day_date, row.values ?? {}, v || null))
+          }}
+          className="h-6 min-w-[80px] text-[11px]"
+        />
+      </td>
+      <td className="px-1 py-0.5 text-right">
+        <button
+          type="button"
+          onClick={() => {
+            if (confirm('Видалити рядок?')) startTransition(() => deleteLogRow(row.id, projectId))
+          }}
+          className="text-muted-foreground hover:text-destructive"
+        >
+          <Trash2 className="h-3 w-3" />
+        </button>
+      </td>
+    </tr>
   )
 }
 
