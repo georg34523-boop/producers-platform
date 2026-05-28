@@ -291,7 +291,6 @@ export const TRAFFIC_CHANNELS = [
   'YouTube',
   'Telegram Ads',
   'Закупка в каналах',
-  'Органіка',
   'Блогери',
 ] as const
 

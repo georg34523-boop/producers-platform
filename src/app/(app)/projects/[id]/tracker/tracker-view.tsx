@@ -970,6 +970,7 @@ function FunnelSettings({
 function FunnelStages({ funnel, projectId }: { funnel: FullFunnel; projectId: string }) {
   const [, startTransition] = useTransition()
   const [libOpen, setLibOpen] = useState(false)
+  const [showPlans, setShowPlans] = useState(false)
   const stages = groupedByStage(funnel.metrics)
 
   const hasTraffic = stages.some((s) => s.stage_group === 'traffic')
@@ -980,12 +981,17 @@ function FunnelStages({ funnel, projectId }: { funnel: FullFunnel; projectId: st
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <div className="text-sm font-medium">Етапи воронки</div>
-        <Button size="sm" variant="outline" onClick={() => setLibOpen(true)}>
-          <Plus className="mr-1 h-3.5 w-3.5" />
-          Додати етап з бібліотеки
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="ghost" onClick={() => setShowPlans((v) => !v)}>
+            {showPlans ? 'Сховати цілі' : 'Цілі'}
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setLibOpen(true)}>
+            <Plus className="mr-1 h-3.5 w-3.5" />
+            Додати етап
+          </Button>
+        </div>
       </div>
 
       {/* Параметри трафіку (якщо включений трафік) */}
@@ -1018,7 +1024,7 @@ function FunnelStages({ funnel, projectId }: { funnel: FullFunnel; projectId: st
             </div>
           </div>
           {hasTraffic ? (
-            <StageMetricsTable metrics={stages.find((s) => s.stage_group === 'traffic')!.metrics} log={funnel.log} projectId={projectId} allMetrics={funnel.metrics} />
+            <StageMetricsTable metrics={stages.find((s) => s.stage_group === 'traffic')!.metrics} log={funnel.log} projectId={projectId} allMetrics={funnel.metrics} showPlans={showPlans} />
           ) : (
             <p className="text-xs text-muted-foreground">Додай хоча б «Витрачено».</p>
           )}
@@ -1047,7 +1053,7 @@ function FunnelStages({ funnel, projectId }: { funnel: FullFunnel; projectId: st
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
-              <StageMetricsTable metrics={s.metrics} log={funnel.log} projectId={projectId} allMetrics={funnel.metrics} />
+              <StageMetricsTable metrics={s.metrics} log={funnel.log} projectId={projectId} allMetrics={funnel.metrics} showPlans={showPlans} />
             </div>
           ))
       )}
@@ -1062,11 +1068,13 @@ function StageMetricsTable({
   log,
   projectId,
   allMetrics,
+  showPlans,
 }: {
   metrics: FunnelMetric[]
   log: FunnelDailyLog[]
   projectId: string
   allMetrics: FunnelMetric[]
+  showPlans: boolean
 }) {
   const [, startTransition] = useTransition()
   return (
@@ -1076,9 +1084,9 @@ function StageMetricsTable({
           <tr>
             <th className="px-3 py-1.5 text-left">Метрика</th>
             <th className="px-3 py-1.5 text-left">Од.</th>
-            <th className="px-3 py-1.5 text-right">План</th>
+            {showPlans ? <th className="px-3 py-1.5 text-right">План</th> : null}
             <th className="px-3 py-1.5 text-right">Факт</th>
-            <th className="px-3 py-1.5 text-right">%</th>
+            {showPlans ? <th className="px-3 py-1.5 text-right">%</th> : null}
             <th className="px-3 py-1.5"></th>
           </tr>
         </thead>
@@ -1094,22 +1102,26 @@ function StageMetricsTable({
                   {isComputed ? <Badge variant="secondary" className="ml-2 text-[10px]">авто</Badge> : null}
                 </td>
                 <td className="px-3 py-1 text-xs text-muted-foreground">{m.unit ?? '—'}</td>
-                <td className="px-3 py-1 text-right">
-                  <Input
-                    type="number"
-                    step="any"
-                    defaultValue={Number(m.plan_value) || ''}
-                    className="ml-auto h-7 w-24 text-right text-sm"
-                    onBlur={(e) => {
-                      const v = Number(e.target.value) || 0
-                      if (v !== Number(m.plan_value)) startTransition(() => updateMetric(m.id, projectId, { plan_value: v }))
-                    }}
-                  />
-                </td>
+                {showPlans ? (
+                  <td className="px-3 py-1 text-right">
+                    <Input
+                      type="number"
+                      step="any"
+                      defaultValue={Number(m.plan_value) || ''}
+                      className="ml-auto h-7 w-24 text-right text-sm"
+                      onBlur={(e) => {
+                        const v = Number(e.target.value) || 0
+                        if (v !== Number(m.plan_value)) startTransition(() => updateMetric(m.id, projectId, { plan_value: v }))
+                      }}
+                    />
+                  </td>
+                ) : null}
                 <td className="px-3 py-1 text-right font-medium">{fmt(fact)}</td>
-                <td className="px-3 py-1 text-right text-xs text-muted-foreground">
-                  {m.plan_value > 0 ? `${pct}%` : '—'}
-                </td>
+                {showPlans ? (
+                  <td className="px-3 py-1 text-right text-xs text-muted-foreground">
+                    {m.plan_value > 0 ? `${pct}%` : '—'}
+                  </td>
+                ) : null}
                 <td className="px-3 py-1 text-right">
                   {!isComputed ? (
                     <button

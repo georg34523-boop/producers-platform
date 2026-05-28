@@ -17,10 +17,6 @@ function findByRole(metrics: FunnelMetric[], role: FunnelMetric['role']) {
   return metrics.find((m) => m.role === role)
 }
 
-function findByKeyEnding(metrics: FunnelMetric[], suffix: string) {
-  return metrics.find((m) => m.key.endsWith(`__${suffix}`))
-}
-
 export type DerivedMetric = {
   key: string
   label: string
@@ -42,7 +38,12 @@ export function computeDerivedMetrics(
   const spentM = metrics.find((m) => m.key === 'traffic__spent')
   const impressionsM = metrics.find((m) => m.key === 'traffic__impressions')
   const clicksM = metrics.find((m) => m.key === 'traffic__clicks')
-  const applicationsM = findByRole(metrics, 'applications')
+  // Заявки: спершу application.total (main + retry), якщо є — інакше будь-яка метрика з role='applications'
+  const applicationTotal = metrics.find(
+    (m) => m.stage_group === 'application' && m.computed_from && m.computed_from.length > 0,
+  )
+  const fallbackApplicationsM = findByRole(metrics, 'applications')
+  const applicationsM = applicationTotal ?? fallbackApplicationsM
   const revenueMain = metrics.find((m) => m.role === 'revenue' && m.stage_group?.startsWith('payment'))
   const revenueMini = metrics.find((m) => m.role === 'revenue' && m.stage_group?.startsWith('mini_payment'))
   const salesMain = metrics.find((m) => m.role === 'sales' && m.stage_group?.startsWith('payment'))
@@ -58,6 +59,11 @@ export function computeDerivedMetrics(
   const revenue =
     (revenueMain ? sum(revenueMain.key) : 0) + (revenueMini ? sum(revenueMini.key) : 0)
   const sales = salesMain ? sum(salesMain.key) : 0
+
+  // Всього заявок (як перша цифра, найважливіша)
+  if (applications > 0) {
+    out.push({ key: 'total_apps', label: 'Всього заявок', value: applications, unit: 'шт' })
+  }
 
   // CPM = (spent / impressions) × 1000
   if (spent > 0 && impressions > 0) {
@@ -91,17 +97,6 @@ export function computeDerivedMetrics(
   if (revenue > 0 && sales > 0) {
     out.push({ key: 'avg_check', label: 'Середній чек', value: revenue / sales, unit: '$' })
   }
-  // % заявок з дожиму (тільки якщо є application stage)
-  const appRetry = findByKeyEnding(metrics, 'retry')
-  const appTotal = findByKeyEnding(metrics, 'total')
-  if (appRetry && appTotal && appRetry.stage_group === 'application') {
-    const retry = sum(appRetry.key)
-    const total = applications
-    if (total > 0) {
-      out.push({ key: 'retry_share', label: '% заявок з дожиму', value: (retry / total) * 100, unit: '%' })
-    }
-  }
-
   return out
 }
 
