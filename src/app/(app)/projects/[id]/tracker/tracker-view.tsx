@@ -106,10 +106,25 @@ function sumMetric(log: FunnelDailyLog[], key: string): number {
   }
   return s
 }
-function metricFact(m: FunnelMetric, log: FunnelDailyLog[]): number {
-  // Для computed-метрик факт = сумма фактов входящих ключей
+/** Auto-розрахункова метрика: computed_from або відомі похідні (CR сайту). */
+function isAutoMetric(m: FunnelMetric): boolean {
+  if (m.computed_from && m.computed_from.length > 0) return true
+  if (m.key.endsWith('__landing_cr')) return true
+  return false
+}
+function metricFact(m: FunnelMetric, log: FunnelDailyLog[], allMetrics?: FunnelMetric[]): number {
   if (m.computed_from && m.computed_from.length > 0) {
     return m.computed_from.reduce((s, k) => s + sumMetric(log, k), 0)
+  }
+  if (m.key.endsWith('__landing_cr') && allMetrics) {
+    const apps = allMetrics.find((x) => x.role === 'applications')
+    const clicksM = allMetrics.find((x) => x.key === 'traffic__clicks')
+    if (!apps || !clicksM) return 0
+    const a = apps.computed_from?.length
+      ? apps.computed_from.reduce((s, k) => s + sumMetric(log, k), 0)
+      : sumMetric(log, apps.key)
+    const c = sumMetric(log, clicksM.key)
+    return c > 0 ? (a / c) * 100 : 0
   }
   return sumMetric(log, m.key)
 }
@@ -938,7 +953,7 @@ function FunnelStages({ funnel, projectId }: { funnel: FullFunnel; projectId: st
             </div>
           </div>
           {hasTraffic ? (
-            <StageMetricsTable metrics={stages.find((s) => s.stage_group === 'traffic')!.metrics} log={funnel.log} projectId={projectId} />
+            <StageMetricsTable metrics={stages.find((s) => s.stage_group === 'traffic')!.metrics} log={funnel.log} projectId={projectId} allMetrics={funnel.metrics} />
           ) : (
             <p className="text-xs text-muted-foreground">Додай хоча б «Витрачено».</p>
           )}
@@ -967,7 +982,7 @@ function FunnelStages({ funnel, projectId }: { funnel: FullFunnel; projectId: st
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
-              <StageMetricsTable metrics={s.metrics} log={funnel.log} projectId={projectId} />
+              <StageMetricsTable metrics={s.metrics} log={funnel.log} projectId={projectId} allMetrics={funnel.metrics} />
             </div>
           ))
       )}
@@ -981,10 +996,12 @@ function StageMetricsTable({
   metrics,
   log,
   projectId,
+  allMetrics,
 }: {
   metrics: FunnelMetric[]
   log: FunnelDailyLog[]
   projectId: string
+  allMetrics: FunnelMetric[]
 }) {
   const [, startTransition] = useTransition()
   return (
@@ -1002,9 +1019,9 @@ function StageMetricsTable({
         </thead>
         <tbody className="divide-y">
           {metrics.map((m) => {
-            const fact = metricFact(m, log)
+            const fact = metricFact(m, log, allMetrics)
             const pct = m.plan_value > 0 ? Math.round((fact / Number(m.plan_value)) * 100) : 0
-            const isComputed = Boolean(m.computed_from && m.computed_from.length > 0)
+            const isComputed = isAutoMetric(m)
             return (
               <tr key={m.id} className="hover:bg-muted/10">
                 <td className="px-3 py-1">
@@ -1140,7 +1157,7 @@ function FunnelLog({
 }) {
   const [addOpen, setAddOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const editableMetrics = funnel.metrics.filter((m) => !(m.computed_from && m.computed_from.length > 0))
+  const editableMetrics = funnel.metrics.filter((m) => !isAutoMetric(m))
 
   return (
     <div className="space-y-2">
