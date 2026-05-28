@@ -53,11 +53,17 @@ function inRange(d: string, from: Date, to: Date): boolean {
   return dt >= from && dt <= to
 }
 
-function sumExpensesInRange(expenses: ProjectExpense[], from: Date, to: Date): number {
+function sumExpensesInRange(
+  expenses: ProjectExpense[],
+  from: Date,
+  to: Date,
+  payerFilter?: (p: string) => boolean,
+): number {
   let sum = 0
   const daysInRange = Math.max(1, Math.round((to.getTime() - from.getTime()) / 86_400_000) + 1)
   const monthsInRange = Math.max(1, daysInRange / 30)
   for (const e of expenses) {
+    if (payerFilter && !payerFilter(e.payer)) continue
     if (e.recurrence === 'one_off') {
       const d = e.one_off_date ? new Date(e.one_off_date + 'T00:00:00Z') : null
       if (d && d >= from && d <= to) sum += Number(e.amount)
@@ -180,7 +186,10 @@ export function computeUnits(input: UnitsInput): UnitsResult {
 
   const gross = funnelAgg.reduce((s, f) => s + f.revenue, 0) - totalReturns
   const adSpend = funnelAgg.reduce((s, f) => s + f.traffic, 0)
-  const centerExpenses = sumExpensesInRange(expenses, from, to)
+  // Витрати, які лягають на центр: payer = 'center' або 'project' (за замовч.)
+  const centerExpenses = sumExpensesInRange(expenses, from, to, (p) => p === 'center' || p === 'project')
+  // Окремо витрати експерта (для блоку «справочно для эксперта»)
+  const expertExpenses = sumExpensesInRange(expenses, from, to, (p) => p === 'expert')
 
   const centerIncome = computeCenterShare(
     project.work_model,
@@ -191,7 +200,7 @@ export function computeUnits(input: UnitsInput): UnitsResult {
   const expertPart = gross - centerIncome
   const netProfit = centerIncome - centerExpenses
   const margin = gross > 0 ? netProfit / gross : 0
-  const expertProfit = expertPart - adSpend
+  const expertProfit = expertPart - adSpend - expertExpenses
   const romi = adSpend > 0 ? (gross - adSpend) / adSpend : 0
   const drr = gross > 0 ? adSpend / gross : 0
 

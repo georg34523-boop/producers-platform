@@ -77,3 +77,37 @@ export async function setProductStatus(
   await supabase.from('products').update({ status }).eq('id', productId)
   revalidatePath(`/projects/${projectId}/products`)
 }
+
+// ============================================================
+// Multiple prices per product
+// ============================================================
+export async function addProductPrice(
+  productId: string,
+  projectId: string,
+  name: string,
+  price: number,
+): Promise<void> {
+  await requireProfile()
+  const supabase = await createClient()
+  const { data: last } = await supabase
+    .from('product_prices')
+    .select('position')
+    .eq('product_id', productId)
+    .order('position', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  await supabase.from('product_prices').insert({
+    product_id: productId,
+    name,
+    price,
+    position: (last?.position ?? -1) + 1,
+  })
+  revalidatePath(`/projects/${projectId}/products`)
+}
+
+export async function deleteProductPrice(priceId: string, projectId: string): Promise<void> {
+  await requireProfile()
+  const supabase = await createClient()
+  await supabase.from('product_prices').delete().eq('id', priceId)
+  revalidatePath(`/projects/${projectId}/products`)
+}

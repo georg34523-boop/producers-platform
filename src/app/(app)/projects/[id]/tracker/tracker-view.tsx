@@ -174,7 +174,26 @@ export function TrackerView({
       <MonthSwitcher projectId={projectId} tracker={tracker} />
       <BlockA projectId={projectId} tracker={tracker} weeklyPlans={weeklyPlans} funnels={funnels} />
       <FunnelsSection projectId={projectId} tracker={tracker} funnels={funnels} products={products} />
-      <BlockD projectId={projectId} tracker={tracker} />
+      <ReflectionDialog projectId={projectId} tracker={tracker} />
+    </div>
+  )
+}
+
+function ReflectionDialog({ projectId, tracker }: { projectId: string; tracker: MonthlyTracker }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="flex justify-end">
+      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+        Рефлексія місяця
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Якість роботи з експертом — {MONTH_LABEL_RU[tracker.month]} {tracker.year}</DialogTitle>
+          </DialogHeader>
+          <BlockD projectId={projectId} tracker={tracker} />
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -261,45 +280,85 @@ function BlockA({
           <PlanField label="Максимум" trackerId={tracker.id} projectId={projectId} field="revenue_plan_max" defaultValue={Number(tracker.revenue_plan_max)} />
         </div>
 
-        <div>
-          <div className="mb-2 text-xs text-muted-foreground">Cash flow по тижнях</div>
-          <div className="overflow-hidden rounded-md border">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
-                <tr>
-                  <th className="px-3 py-2 text-left">Тиждень</th>
-                  <th className="px-3 py-2 text-right">План</th>
-                  <th className="px-3 py-2 text-right">Факт</th>
-                  <th className="px-3 py-2 text-right">% викон.</th>
-                  <th className="px-3 py-2 text-center">Статус</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {weeks.map((w) => {
-                  const fact = factByWeek.get(w.idx) ?? 0
-                  const plan = planByWeek.get(w.idx) ?? 0
-                  const wpct = plan > 0 ? Math.round((fact / plan) * 100) : 0
-                  const status = plan === 0 ? '—' : wpct >= 85 ? '🟢 в плані' : wpct >= 70 ? '🟡 нижче плану' : '🔴 критично'
-                  return (
-                    <tr key={w.idx} className="hover:bg-muted/20">
-                      <td className="px-3 py-2">
-                        Тиждень {w.idx} ({w.start}–{w.end})
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        <WeeklyPlanInput trackerId={tracker.id} projectId={projectId} weekIndex={w.idx} defaultValue={plan} />
-                      </td>
-                      <td className="px-3 py-2 text-right font-medium">{fmt(fact)}</td>
-                      <td className="px-3 py-2 text-right">{plan > 0 ? `${wpct}%` : '—'}</td>
-                      <td className="px-3 py-2 text-center text-xs">{status}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <CashFlowWeeks weeks={weeks} planByWeek={planByWeek} factByWeek={factByWeek} trackerId={tracker.id} projectId={projectId} year={tracker.year} month={tracker.month} />
       </CardContent>
     </Card>
+  )
+}
+
+function CashFlowWeeks({
+  weeks,
+  planByWeek,
+  factByWeek,
+  trackerId,
+  projectId,
+  year,
+  month,
+}: {
+  weeks: { idx: number; start: number; end: number }[]
+  planByWeek: Map<number, number>
+  factByWeek: Map<number, number>
+  trackerId: string
+  projectId: string
+  year: number
+  month: number
+}) {
+  // Визначаємо «поточну» неделю (якщо ми у цьому місяці)
+  const today = new Date()
+  const isCurrentMonth = today.getUTCFullYear() === year && today.getUTCMonth() + 1 === month
+  const currentDay = today.getUTCDate()
+  const currentWeekIdx = isCurrentMonth
+    ? (weeks.find((w) => currentDay >= w.start && currentDay <= w.end)?.idx ?? weeks[0]!.idx)
+    : weeks[0]!.idx
+  const [expanded, setExpanded] = useState(false)
+  const visible = expanded ? weeks : weeks.filter((w) => w.idx === currentWeekIdx)
+
+  const renderRow = (w: { idx: number; start: number; end: number }, highlight = false) => {
+    const fact = factByWeek.get(w.idx) ?? 0
+    const plan = planByWeek.get(w.idx) ?? 0
+    const wpct = plan > 0 ? Math.round((fact / plan) * 100) : 0
+    const status = plan === 0 ? '—' : wpct >= 85 ? '🟢 в плані' : wpct >= 70 ? '🟡 нижче плану' : '🔴 критично'
+    return (
+      <tr key={w.idx} className={cn('hover:bg-muted/20', highlight && 'bg-muted/30')}>
+        <td className="px-3 py-2">
+          Тиждень {w.idx} ({w.start}–{w.end})
+          {highlight ? <Badge variant="secondary" className="ml-2 text-[10px]">актуальна</Badge> : null}
+        </td>
+        <td className="px-3 py-2 text-right">
+          <WeeklyPlanInput trackerId={trackerId} projectId={projectId} weekIndex={w.idx} defaultValue={plan} />
+        </td>
+        <td className="px-3 py-2 text-right font-medium">{fmt(fact)}</td>
+        <td className="px-3 py-2 text-right">{plan > 0 ? `${wpct}%` : '—'}</td>
+        <td className="px-3 py-2 text-center text-xs">{status}</td>
+      </tr>
+    )
+  }
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-xs text-muted-foreground">Cash flow по тижнях</div>
+        <Button size="sm" variant="ghost" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? 'Згорнути' : `Показати всі (${weeks.length})`}
+        </Button>
+      </div>
+      <div className="overflow-hidden rounded-md border">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+            <tr>
+              <th className="px-3 py-2 text-left">Тиждень</th>
+              <th className="px-3 py-2 text-right">План</th>
+              <th className="px-3 py-2 text-right">Факт</th>
+              <th className="px-3 py-2 text-right">% викон.</th>
+              <th className="px-3 py-2 text-center">Статус</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {visible.map((w) => renderRow(w, isCurrentMonth && w.idx === currentWeekIdx))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   )
 }
 
@@ -1664,15 +1723,11 @@ function LogRow({
   )
 }
 
-// Блок D ----------------------------------------------------
+// Блок D — Рефлексія (показується в попапі) -----------------
 function BlockD({ projectId, tracker }: { projectId: string; tracker: MonthlyTracker }) {
   const [, startTransition] = useTransition()
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Якість роботи з експертом</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
+    <div className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1">
             <Label className="text-xs">NPS (0–10)</Label>
@@ -1711,7 +1766,6 @@ function BlockD({ projectId, tracker }: { projectId: string; tracker: MonthlyTra
             onBlur={(e) => startTransition(() => updateTrackerField(tracker.id, projectId, 'expert_mood', e.target.value))}
           />
         </div>
-      </CardContent>
-    </Card>
+    </div>
   )
 }

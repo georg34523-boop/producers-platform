@@ -64,6 +64,17 @@ export interface ProductPriceHistory {
   changed_by: string | null
 }
 
+export interface ProductPrice {
+  id: string
+  product_id: string
+  name: string
+  price: number
+  position: number
+  created_at: string
+}
+
+export type ExpensePayer = 'project' | 'center' | 'expert'
+
 export interface MonthlyTracker {
   id: string
   project_id: string
@@ -104,6 +115,7 @@ export interface TrackerCustomDriver {
   unit: string | null
   plan_value: number
   actual_value: number
+  is_done: boolean
   position: number
 }
 
@@ -163,6 +175,7 @@ export interface ProjectExpense {
   kind: ExpenseKind
   recurrence: ExpenseRecurrence
   amount: number
+  payer: ExpensePayer
   start_date: string
   end_date: string | null
   one_off_date: string | null

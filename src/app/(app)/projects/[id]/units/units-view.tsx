@@ -17,6 +17,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import {
   EXPENSE_KIND_LABEL,
+  EXPENSE_PAYER_LABEL,
   EXPENSE_RECURRENCE_LABEL,
   WORK_MODEL_LABEL,
 } from '@/lib/labels'
@@ -77,13 +78,13 @@ export function UnitsView({
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Деньги центра (текущий месяц)</CardTitle>
+          <CardTitle className="text-base">Цифри проєкту (поточний місяць)</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3 sm:grid-cols-3">
           <BigNum label="Валовая выручка" value={units.gross_revenue} />
           <BigNum label="Доля эксперта" value={units.expert_share} muted />
           <BigNum label="Доход центра" value={units.center_income} />
-          <BigNum label="Расходы центра" value={units.center_expenses} muted />
+          <BigNum label="Витрати проєкту" value={units.center_expenses} muted />
           <BigNum label="Чистая прибыль" value={units.net_profit} highlight />
           <BigNum label="Маржинальность" value={units.margin * 100} suffix="%" />
         </CardContent>
@@ -150,7 +151,7 @@ function ExpensesCard({ projectId, expenses }: { projectId: string; expenses: Pr
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
-        <CardTitle className="text-base">Расходы центра</CardTitle>
+        <CardTitle className="text-base">Витрати проєкту</CardTitle>
         <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
           <Plus className="mr-1 h-3.5 w-3.5" /> Расход
         </Button>
@@ -162,10 +163,11 @@ function ExpensesCard({ projectId, expenses }: { projectId: string; expenses: Pr
           <table className="w-full text-sm">
             <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
               <tr>
-                <th className="px-3 py-2 text-left">Название</th>
+                <th className="px-3 py-2 text-left">Назва</th>
                 <th className="px-3 py-2 text-left">Тип</th>
-                <th className="px-3 py-2 text-left">Период</th>
-                <th className="px-3 py-2 text-right">Сумма</th>
+                <th className="px-3 py-2 text-left">Період</th>
+                <th className="px-3 py-2 text-left">Платит</th>
+                <th className="px-3 py-2 text-right">Сума</th>
                 <th className="px-3 py-2"></th>
               </tr>
             </thead>
@@ -183,6 +185,7 @@ function ExpensesCard({ projectId, expenses }: { projectId: string; expenses: Pr
                       <> · с {new Date(e.start_date).toLocaleDateString('ru-RU')}</>
                     ) : null}
                   </td>
+                  <td className="px-3 py-2 text-xs">{EXPENSE_PAYER_LABEL[e.payer]}</td>
                   <td className="px-3 py-2 text-right">{fmt(Number(e.amount))}</td>
                   <td className="px-3 py-2 text-right">
                     <button
@@ -258,6 +261,14 @@ function NewExpenseDialog({
                 <option value="one_off">Разовый</option>
               </select>
             </div>
+          </div>
+          <div className="space-y-2">
+            <Label>На кого лягає (платит)</Label>
+            <select name="payer" defaultValue="project" className={selectClass}>
+              <option value="project">Проект (сходить з виручки)</option>
+              <option value="center">Центр</option>
+              <option value="expert">Експерт</option>
+            </select>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">

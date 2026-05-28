@@ -5,8 +5,9 @@ import { ArrowLeft } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { PROJECT_STATUS_LABEL, WORK_MODEL_LABEL } from '@/lib/labels'
-import { getProject } from '@/lib/queries/projects'
+import { getProject, listProjects } from '@/lib/queries/projects'
 
+import { ProjectSwitcher } from './project-switcher'
 import { ProjectTabs } from './project-tabs'
 
 export default async function ProjectLayout({
@@ -17,22 +18,28 @@ export default async function ProjectLayout({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
-  const project = await getProject(id)
+  const [project, allProjects] = await Promise.all([getProject(id), listProjects()])
   if (!project) notFound()
 
   return (
     <div className="space-y-6">
       <div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="mb-2 -ml-2"
-          nativeButton={false}
-          render={<Link href="/projects" />}
-        >
-          <ArrowLeft className="mr-1 h-4 w-4" />
-          К проектам
-        </Button>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="-ml-2"
+            nativeButton={false}
+            render={<Link href="/projects" />}
+          >
+            <ArrowLeft className="mr-1 h-4 w-4" />
+            До проектів
+          </Button>
+          <ProjectSwitcher
+            current={{ id: project.id, expert_name: project.expert_name }}
+            projects={allProjects}
+          />
+        </div>
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight">{project.expert_name}</h1>
           <Badge variant={project.status === 'active' ? 'default' : 'secondary'}>

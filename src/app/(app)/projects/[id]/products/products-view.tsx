@@ -1,7 +1,7 @@
 'use client'
 
 import { useActionState, useState, useTransition } from 'react'
-import { Archive, ArchiveRestore, Plus } from 'lucide-react'
+import { Archive, ArchiveRestore, Plus, Trash2 } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -18,14 +18,18 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import type { Product } from '@/lib/supabase/types'
 
+import type { ProductPrice } from '@/lib/supabase/types'
+
 import {
+  addProductPrice,
   createProduct,
+  deleteProductPrice,
   setProductStatus,
   updateProduct,
   type ProductActionState,
 } from './actions'
 
-type ProductWithStats = Product & { qty_month: number; revenue_month: number }
+type ProductWithStats = Product & { qty_month: number; revenue_month: number; prices: ProductPrice[] }
 
 function fmt(n: number): string {
   return n.toLocaleString('ru-RU', { maximumFractionDigits: 0 })
@@ -132,9 +136,10 @@ function ProductRow({ product, projectId }: { product: ProductWithStats; project
                 <p className="mt-1 text-xs text-muted-foreground">{product.description}</p>
               ) : null}
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                <span>Цена: <strong className="text-foreground">{fmt(Number(product.current_price))} $</strong></span>
-                <span>Месяц: <strong className="text-foreground">{fmt(product.qty_month)} продаж · {fmt(product.revenue_month)} $</strong></span>
+                <span>Базова ціна: <strong className="text-foreground">{fmt(Number(product.current_price))} $</strong></span>
+                <span>Місяць: <strong className="text-foreground">{fmt(product.qty_month)} продажів · {fmt(product.revenue_month)} $</strong></span>
               </div>
+              <PriceTiers product={product} projectId={projectId} />
             </div>
             <div className="flex shrink-0 gap-1">
               <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>
@@ -155,6 +160,59 @@ function ProductRow({ product, projectId }: { product: ProductWithStats; project
         )}
       </CardContent>
     </Card>
+  )
+}
+
+function PriceTiers({ product, projectId }: { product: ProductWithStats; projectId: string }) {
+  const [, startTransition] = useTransition()
+  const [name, setName] = useState('')
+  const [price, setPrice] = useState('')
+  return (
+    <div className="mt-3 rounded-md border bg-muted/20 p-2">
+      <div className="mb-1 text-[11px] font-medium text-muted-foreground">Додаткові тарифи / ціни</div>
+      {product.prices.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground">Додай тарифи (наприклад: «Базовий», «Стандарт», «Преміум»).</p>
+      ) : (
+        <ul className="space-y-1">
+          {product.prices.map((tier) => (
+            <li key={tier.id} className="flex items-center justify-between gap-2 text-xs">
+              <span>{tier.name}</span>
+              <span className="font-medium">{fmt(Number(tier.price))} $</span>
+              <button
+                type="button"
+                className="text-muted-foreground hover:text-destructive"
+                onClick={() => startTransition(() => deleteProductPrice(tier.id, projectId))}
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-1 grid grid-cols-[1fr_90px_auto] gap-1">
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Назва" className="h-7 text-xs" />
+        <Input
+          type="number"
+          value={price}
+          onChange={(e) => setPrice(e.target.value)}
+          placeholder="$"
+          className="h-7 text-xs"
+        />
+        <Button
+          size="sm"
+          disabled={!name.trim() || !price}
+          onClick={() => {
+            startTransition(async () => {
+              await addProductPrice(product.id, projectId, name.trim(), Number(price))
+              setName('')
+              setPrice('')
+            })
+          }}
+        >
+          +
+        </Button>
+      </div>
+    </div>
   )
 }
 

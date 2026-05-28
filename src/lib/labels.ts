@@ -43,6 +43,12 @@ export const EXPENSE_RECURRENCE_LABEL: Record<ExpenseRecurrence, string> = {
   one_off: 'Разовый',
 }
 
+export const EXPENSE_PAYER_LABEL: Record<'project' | 'center' | 'expert', string> = {
+  project: 'Проект',
+  center: 'Центр',
+  expert: 'Експерт',
+}
+
 export const MONTH_LABEL_RU: Record<number, string> = {
   1: 'Январь',
   2: 'Февраль',

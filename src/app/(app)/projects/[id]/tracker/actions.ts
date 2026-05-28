@@ -105,7 +105,7 @@ export async function incrementCustomGoal(
 export async function updateCustomGoal(
   goalId: string,
   projectId: string,
-  patch: Partial<{ name: string; plan_value: number; actual_value: number; unit: string | null }>,
+  patch: Partial<{ name: string; plan_value: number; actual_value: number; unit: string | null; is_done: boolean }>,
 ): Promise<void> {
   await requireProfile()
   const supabase = await createClient()

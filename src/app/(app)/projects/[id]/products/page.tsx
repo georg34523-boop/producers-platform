@@ -1,4 +1,4 @@
-import { listProducts } from '@/lib/queries/products'
+import { listProductPrices, listProducts } from '@/lib/queries/products'
 import {
   funnelSemanticTotals,
   getFunnels,
@@ -14,7 +14,12 @@ export default async function ProductsPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
-  const products = await listProducts(id)
+  const [products, prices] = await Promise.all([listProducts(id), listProductPrices(id)])
+  const pricesByProduct = new Map<string, typeof prices>()
+  for (const p of prices) {
+    if (!pricesByProduct.has(p.product_id)) pricesByProduct.set(p.product_id, [])
+    pricesByProduct.get(p.product_id)!.push(p)
+  }
   const { year, month } = nowYearMonth()
   const tracker = await getOrCreateTracker(id, year, month)
   const funnels = await getFunnels(tracker.id)
@@ -39,6 +44,7 @@ export default async function ProductsPage({
     ...p,
     qty_month: byProduct.get(p.id)?.qty ?? 0,
     revenue_month: byProduct.get(p.id)?.revenue ?? 0,
+    prices: pricesByProduct.get(p.id) ?? [],
   }))
 
   return <ProductsView projectId={id} products={productsWithStats} />
