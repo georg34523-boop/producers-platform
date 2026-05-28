@@ -85,15 +85,21 @@ function dayIso(y: number, m: number, d: number): string {
   return `${y}-${pad(m)}-${pad(d)}`
 }
 function weeksOfMonth(y: number, m: number) {
+  // Календарні тижні Пн–Нд: кожен тиждень завершується у неділю (або останній день місяця).
   const total = daysInMonth(y, m)
-  const w: { idx: number; start: number; end: number }[] = []
-  for (let i = 0; i < 5; i++) {
-    const start = i * 7 + 1
-    if (start > total) break
-    const end = Math.min(start + 6, total)
-    w.push({ idx: i + 1, start, end: i === 4 ? total : end })
+  const weeks: { idx: number; start: number; end: number }[] = []
+  let idx = 1
+  let weekStart = 1
+  for (let day = 1; day <= total; day++) {
+    const dow = new Date(Date.UTC(y, m - 1, day)).getUTCDay() // 0 = Sunday
+    if (dow === 0 || day === total) {
+      weeks.push({ idx, start: weekStart, end: day })
+      idx++
+      weekStart = day + 1
+    }
   }
-  return w
+  // Більше 6 тижнів в одному місяці не буває — обмежимо для бази (week_index ≤ 6)
+  return weeks.slice(0, 6)
 }
 function dayOfWeek(date: string): string {
   return ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'][new Date(date + 'T00:00:00Z').getUTCDay()]!
