@@ -547,3 +547,146 @@ export async function deleteLogRow(rowId: string, projectId: string): Promise<vo
   await supabase.from('funnel_daily_log').delete().eq('id', rowId)
   revalidate(projectId)
 }
+
+// ============================================================
+// Реактивація: перенос лідів між воронками
+// ============================================================
+export async function upsertReactivation(input: {
+  source_funnel_id: string
+  target_funnel_id: string
+  project_id: string
+  day_date: string
+  count: number
+}): Promise<void> {
+  await requireProfile()
+  if (input.source_funnel_id === input.target_funnel_id) return
+  const supabase = await createClient()
+  const count = Math.max(0, Math.floor(Number(input.count) || 0))
+  if (count === 0) {
+    await supabase
+      .from('funnel_reactivations')
+      .delete()
+      .eq('source_funnel_id', input.source_funnel_id)
+      .eq('target_funnel_id', input.target_funnel_id)
+      .eq('day_date', input.day_date)
+  } else {
+    await supabase
+      .from('funnel_reactivations')
+      .upsert(
+        {
+          source_funnel_id: input.source_funnel_id,
+          target_funnel_id: input.target_funnel_id,
+          day_date: input.day_date,
+          count,
+        },
+        { onConflict: 'source_funnel_id,target_funnel_id,day_date' },
+      )
+  }
+  revalidate(input.project_id)
+}
+
+export async function deleteReactivation(id: string, projectId: string): Promise<void> {
+  await requireProfile()
+  const supabase = await createClient()
+  await supabase.from('funnel_reactivations').delete().eq('id', id)
+  revalidate(projectId)
+}
+
+// ============================================================
+// Продажі по продуктах (для воронок з кількома продуктами)
+// ============================================================
+async function syncPaymentDayFromProductSales(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  funnelId: string,
+  day: string,
+): Promise<void> {
+  // Сума всіх продажів по продуктах за день
+  const { data: rows } = await supabase
+    .from('funnel_product_sales')
+    .select('count, amount')
+    .eq('funnel_id', funnelId)
+    .eq('day_date', day)
+  const totalCount = (rows ?? []).reduce((s, r) => s + Number(r.count ?? 0), 0)
+  const totalAmount = (rows ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0)
+
+  // Шукаємо payment-стейдж: keys payment__count / payment__amount
+  const { data: log } = await supabase
+    .from('funnel_daily_log')
+    .select('id, values, comment')
+    .eq('funnel_id', funnelId)
+    .eq('day_date', day)
+    .maybeSingle()
+
+  const values: Record<string, number> = { ...(log?.values ?? {}) }
+  if (totalCount > 0) values['payment__count'] = totalCount
+  else delete values['payment__count']
+  if (totalAmount > 0) values['payment__amount'] = totalAmount
+  else delete values['payment__amount']
+
+  const comment = log?.comment ?? null
+  const allEmpty = Object.keys(values).length === 0 && !comment
+  if (allEmpty) {
+    if (log?.id) await supabase.from('funnel_daily_log').delete().eq('id', log.id)
+  } else {
+    await supabase.from('funnel_daily_log').upsert(
+      {
+        funnel_id: funnelId,
+        day_date: day,
+        values,
+        comment,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'funnel_id,day_date' },
+    )
+  }
+}
+
+export async function upsertProductSale(input: {
+  funnel_id: string
+  project_id: string
+  product_id: string
+  day_date: string
+  count: number
+  amount: number
+}): Promise<void> {
+  await requireProfile()
+  const supabase = await createClient()
+  const count = Math.max(0, Math.floor(Number(input.count) || 0))
+  const amount = Math.max(0, Number(input.amount) || 0)
+  if (count === 0 && amount === 0) {
+    await supabase
+      .from('funnel_product_sales')
+      .delete()
+      .eq('funnel_id', input.funnel_id)
+      .eq('product_id', input.product_id)
+      .eq('day_date', input.day_date)
+  } else {
+    await supabase
+      .from('funnel_product_sales')
+      .upsert(
+        {
+          funnel_id: input.funnel_id,
+          product_id: input.product_id,
+          day_date: input.day_date,
+          count,
+          amount,
+        },
+        { onConflict: 'funnel_id,product_id,day_date' },
+      )
+  }
+  await syncPaymentDayFromProductSales(supabase, input.funnel_id, input.day_date)
+  revalidate(input.project_id)
+}
+
+export async function deleteProductSale(id: string, projectId: string): Promise<void> {
+  await requireProfile()
+  const supabase = await createClient()
+  const { data: row } = await supabase
+    .from('funnel_product_sales')
+    .select('funnel_id, day_date')
+    .eq('id', id)
+    .maybeSingle()
+  await supabase.from('funnel_product_sales').delete().eq('id', id)
+  if (row) await syncPaymentDayFromProductSales(supabase, row.funnel_id as string, row.day_date as string)
+  revalidate(projectId)
+}

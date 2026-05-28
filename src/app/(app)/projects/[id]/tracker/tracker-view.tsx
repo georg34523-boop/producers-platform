@@ -39,6 +39,8 @@ import type {
   FunnelDailyLog,
   FunnelMetric,
   FunnelMiniPrice,
+  FunnelProductSale,
+  FunnelReactivation,
   LaunchStatus,
   MonthlyTracker,
   Product,
@@ -55,6 +57,8 @@ import {
   deleteLogRow,
   deleteMetric,
   deleteMiniPrice,
+  deleteProductSale,
+  deleteReactivation,
   deleteStage,
   setFunnelProducts,
   setWeeklyPlan,
@@ -62,6 +66,8 @@ import {
   updateMetric,
   updateTrackerField,
   upsertDailyLog,
+  upsertProductSale,
+  upsertReactivation,
 } from './actions'
 
 type FullFunnel = Funnel & {
@@ -69,6 +75,9 @@ type FullFunnel = Funnel & {
   metrics: FunnelMetric[]
   log: FunnelDailyLog[]
   product_ids: string[]
+  product_sales: FunnelProductSale[]
+  reactivations_out: FunnelReactivation[]
+  reactivations_in: FunnelReactivation[]
 }
 
 // Утилиты ----------------------------------------------------
@@ -112,15 +121,40 @@ function sumMetric(log: FunnelDailyLog[], key: string): number {
   }
   return s
 }
-/** Auto-розрахункова метрика: computed_from або відомі похідні (CR сайту). */
-function isAutoMetric(m: FunnelMetric): boolean {
+/** Метрики, які зливаються в application.main з upstream етапів (вебінар/автовебінар). */
+function upstreamApplicationsFor(m: FunnelMetric, allMetrics: FunnelMetric[]): FunnelMetric[] {
+  if (m.key !== 'application__main') return []
+  return allMetrics.filter(
+    (x) =>
+      x.role === 'applications' &&
+      (x.stage_group?.startsWith('webinar') || x.stage_group?.startsWith('autowebinar')),
+  )
+}
+
+/** Auto-розрахункова метрика: computed_from, application.main з upstream, CR сайту. */
+function isAutoMetric(m: FunnelMetric, allMetrics?: FunnelMetric[]): boolean {
   if (m.computed_from && m.computed_from.length > 0) return true
   if (m.key.endsWith('__landing_cr')) return true
+  if (m.key === 'application__main' && allMetrics && upstreamApplicationsFor(m, allMetrics).length > 0) return true
   return false
 }
 function metricFact(m: FunnelMetric, log: FunnelDailyLog[], allMetrics?: FunnelMetric[]): number {
+  // Рекурсивне розгортання computed_from (компоненти теж можуть бути авто)
   if (m.computed_from && m.computed_from.length > 0) {
-    return m.computed_from.reduce((s, k) => s + sumMetric(log, k), 0)
+    let s = 0
+    for (const k of m.computed_from) {
+      const child = allMetrics?.find((x) => x.key === k)
+      s += child ? metricFact(child, log, allMetrics) : sumMetric(log, k)
+    }
+    return s
+  }
+  // application.main = ручний ввід + сума upstream applications (вебінар/автовебінар)
+  if (m.key === 'application__main' && allMetrics) {
+    const upstream = upstreamApplicationsFor(m, allMetrics)
+    if (upstream.length > 0) {
+      const auto = upstream.reduce((s, x) => s + sumMetric(log, x.key), 0)
+      return sumMetric(log, m.key) + auto
+    }
   }
   if (m.key.endsWith('__landing_cr') && allMetrics) {
     const apps = allMetrics.find((x) => x.role === 'applications')
@@ -497,7 +531,7 @@ function FunnelsSection({
                   ) : null}
                 </DialogTitle>
               </DialogHeader>
-              <FunnelDetail funnel={openFunnel} projectId={projectId} products={products} year={tracker.year} month={tracker.month} />
+              <FunnelDetail funnel={openFunnel} projectId={projectId} products={products} allFunnels={funnels} year={tracker.year} month={tracker.month} />
             </>
           ) : null}
         </DialogContent>
@@ -510,13 +544,18 @@ function FunnelCard({ funnel, onOpen }: { funnel: FullFunnel; onOpen: () => void
   // Семантические агрегаты по факту за весь журнал
   const totals = useMemo(() => {
     const agg = { revenue: 0, sales: 0, applications: 0, traffic: 0 }
+    // «Заголовкова» метрика заявок: total (computed) → main (з upstream) → перша applications-роль
+    const headlineApps =
+      funnel.metrics.find((m) => m.key === 'application__total') ??
+      funnel.metrics.find((m) => m.key === 'application__main') ??
+      funnel.metrics.find((m) => m.role === 'applications')
+    if (headlineApps) agg.applications = metricFact(headlineApps, funnel.log, funnel.metrics)
     for (const m of funnel.metrics) {
       const fact = m.computed_from?.length
         ? m.computed_from.reduce((s, k) => s + sumMetric(funnel.log, k), 0)
         : sumMetric(funnel.log, m.key)
       if (m.role === 'revenue') agg.revenue += fact
       else if (m.role === 'sales' && m.stage_group?.startsWith('payment')) agg.sales += fact
-      else if (m.role === 'applications') agg.applications += fact
       else if (m.role === 'traffic_spend') agg.traffic += fact
     }
     return agg
@@ -738,6 +777,173 @@ function FunnelDetail({
   funnel,
   projectId,
   products,
+  allFunnels,
+  year,
+  month,
+}: {
+  funnel: FullFunnel
+  projectId: string
+  products: Product[]
+  allFunnels: FullFunnel[]
+  year: number
+  month: number
+}) {
+  const hasReactivationOut = funnel.metrics.some((m) => m.stage_group === 'reactivation_out')
+  const attachedProducts = useMemo(
+    () => products.filter((p) => funnel.product_ids.includes(p.id)),
+    [products, funnel.product_ids],
+  )
+  const otherFunnels = useMemo(() => allFunnels.filter((f) => f.id !== funnel.id), [allFunnels, funnel.id])
+  return (
+    <div className="space-y-5">
+      <FunnelSettings funnel={funnel} projectId={projectId} products={products} />
+      <DerivedStats funnel={funnel} />
+      {funnel.reactivations_in.length > 0 ? (
+        <ReactivationInSection funnel={funnel} allFunnels={allFunnels} />
+      ) : null}
+      <FunnelStages funnel={funnel} projectId={projectId} />
+      {attachedProducts.length > 1 ? (
+        <ProductSalesSection funnel={funnel} projectId={projectId} products={attachedProducts} year={year} month={month} />
+      ) : null}
+      {hasReactivationOut ? (
+        <ReactivationOutSection funnel={funnel} projectId={projectId} otherFunnels={otherFunnels} year={year} month={month} />
+      ) : null}
+      <FunnelLog funnel={funnel} projectId={projectId} year={year} month={month} />
+    </div>
+  )
+}
+
+// Реактивация: список лідів, переданих з цієї воронки в інші ----
+function ReactivationOutSection({
+  funnel,
+  projectId,
+  otherFunnels,
+  year,
+  month,
+}: {
+  funnel: FullFunnel
+  projectId: string
+  otherFunnels: FullFunnel[]
+  year: number
+  month: number
+}) {
+  const [, startTransition] = useTransition()
+  const [day, setDay] = useState(dayIso(year, month, new Date().getUTCDate()))
+  const [targetId, setTargetId] = useState<string>(otherFunnels[0]?.id ?? '')
+  const [count, setCount] = useState('')
+
+  const submit = () => {
+    if (!targetId) return
+    const c = Number(count)
+    if (!Number.isFinite(c) || c <= 0) return
+    startTransition(async () => {
+      await upsertReactivation({
+        source_funnel_id: funnel.id,
+        target_funnel_id: targetId,
+        project_id: projectId,
+        day_date: day,
+        count: c,
+      })
+      setCount('')
+    })
+  }
+
+  const rows = [...funnel.reactivations_out].sort((a, b) => b.day_date.localeCompare(a.day_date))
+  const funnelById = new Map(otherFunnels.map((f) => [f.id, f.name]))
+  const total = rows.reduce((s, r) => s + r.count, 0)
+
+  return (
+    <div className="rounded-md border bg-card/40 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-sm font-medium">Реактивація: перенос лідів</div>
+        <div className="text-xs text-muted-foreground">Всього: {fmt(total)}</div>
+      </div>
+
+      {otherFunnels.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Інших воронок немає — створи цільову, щоб переносити в неї лідів.</p>
+      ) : (
+        <>
+          <div className="grid grid-cols-[140px_1fr_90px_auto] gap-2 rounded-md border bg-background p-2">
+            <Input type="date" value={day} onChange={(e) => setDay(e.target.value)} className="h-8 text-xs" />
+            <select
+              value={targetId}
+              onChange={(e) => setTargetId(e.target.value)}
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+            >
+              {otherFunnels.map((f) => (
+                <option key={f.id} value={f.id}>{f.name}</option>
+              ))}
+            </select>
+            <Input type="number" min={0} step={1} value={count} onChange={(e) => setCount(e.target.value)} placeholder="К-сть" className="h-8 text-xs" />
+            <Button size="sm" onClick={submit} disabled={!targetId || !count}>+ Перенести</Button>
+          </div>
+
+          {rows.length > 0 ? (
+            <ul className="mt-2 divide-y rounded-md border bg-background">
+              {rows.map((r) => (
+                <li key={r.id} className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs">
+                  <span className="text-muted-foreground">
+                    {new Date(r.day_date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}
+                  </span>
+                  <span className="flex-1 truncate">→ {funnelById.get(r.target_funnel_id) ?? '—'}</span>
+                  <span className="font-medium">{fmt(r.count)}</span>
+                  <button
+                    type="button"
+                    onClick={() => startTransition(() => deleteReactivation(r.id, projectId))}
+                    className="text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-xs text-muted-foreground">Поки що нічого не передавали.</p>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// Реактивация: вхідні ліди в цю воронку (read-only) ------------
+function ReactivationInSection({
+  funnel,
+  allFunnels,
+}: {
+  funnel: FullFunnel
+  allFunnels: FullFunnel[]
+}) {
+  const funnelById = new Map(allFunnels.map((f) => [f.id, f.name]))
+  // згрупуємо по source funnel
+  const bySource = new Map<string, number>()
+  for (const r of funnel.reactivations_in) {
+    bySource.set(r.source_funnel_id, (bySource.get(r.source_funnel_id) ?? 0) + r.count)
+  }
+  const total = funnel.reactivations_in.reduce((s, r) => s + r.count, 0)
+  return (
+    <div className="rounded-md border bg-card/40 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-sm font-medium">Реактивація: вхідні</div>
+        <div className="text-xs text-muted-foreground">Всього лідів: {fmt(total)}</div>
+      </div>
+      <div className="grid gap-1.5 sm:grid-cols-2">
+        {[...bySource.entries()].map(([src, c]) => (
+          <div key={src} className="flex items-center justify-between rounded-md border bg-background px-2 py-1 text-xs">
+            <span className="truncate text-muted-foreground">з «{funnelById.get(src) ?? '—'}»</span>
+            <span className="font-medium">{fmt(c)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Продажі по продуктах: для воронок з кількома продуктами -------
+function ProductSalesSection({
+  funnel,
+  projectId,
+  products,
   year,
   month,
 }: {
@@ -747,12 +953,84 @@ function FunnelDetail({
   year: number
   month: number
 }) {
+  const [, startTransition] = useTransition()
+  const [day, setDay] = useState(dayIso(year, month, new Date().getUTCDate()))
+  const [productId, setProductId] = useState<string>(products[0]?.id ?? '')
+  const [count, setCount] = useState('')
+  const [amount, setAmount] = useState('')
+
+  const submit = () => {
+    if (!productId) return
+    const c = Number(count)
+    const a = Number(amount)
+    if ((!Number.isFinite(c) || c <= 0) && (!Number.isFinite(a) || a <= 0)) return
+    startTransition(async () => {
+      await upsertProductSale({
+        funnel_id: funnel.id,
+        project_id: projectId,
+        product_id: productId,
+        day_date: day,
+        count: Number.isFinite(c) ? c : 0,
+        amount: Number.isFinite(a) ? a : 0,
+      })
+      setCount('')
+      setAmount('')
+    })
+  }
+
+  const rows = [...funnel.product_sales].sort((a, b) => b.day_date.localeCompare(a.day_date))
+  const productName = new Map(products.map((p) => [p.id, p.name]))
+  const totalCount = rows.reduce((s, r) => s + r.count, 0)
+  const totalAmount = rows.reduce((s, r) => s + Number(r.amount), 0)
+
   return (
-    <div className="space-y-5">
-      <FunnelSettings funnel={funnel} projectId={projectId} products={products} />
-      <DerivedStats funnel={funnel} />
-      <FunnelStages funnel={funnel} projectId={projectId} />
-      <FunnelLog funnel={funnel} projectId={projectId} year={year} month={month} />
+    <div className="rounded-md border bg-card/40 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-sm font-medium">Продажі по продуктах</div>
+        <div className="text-xs text-muted-foreground">
+          {fmt(totalCount)} шт · {fmt(totalAmount)} $
+        </div>
+      </div>
+
+      <div className="grid grid-cols-[140px_1fr_80px_90px_auto] gap-2 rounded-md border bg-background p-2">
+        <Input type="date" value={day} onChange={(e) => setDay(e.target.value)} className="h-8 text-xs" />
+        <select
+          value={productId}
+          onChange={(e) => setProductId(e.target.value)}
+          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+        >
+          {products.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+        <Input type="number" min={0} step={1} value={count} onChange={(e) => setCount(e.target.value)} placeholder="К-сть" className="h-8 text-xs" />
+        <Input type="number" min={0} step="any" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="$" className="h-8 text-xs" />
+        <Button size="sm" onClick={submit} disabled={!productId || (!count && !amount)}>+ Продаж</Button>
+      </div>
+
+      {rows.length > 0 ? (
+        <ul className="mt-2 divide-y rounded-md border bg-background">
+          {rows.map((r) => (
+            <li key={r.id} className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs">
+              <span className="text-muted-foreground">
+                {new Date(r.day_date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}
+              </span>
+              <span className="flex-1 truncate">{productName.get(r.product_id) ?? '—'}</span>
+              <span>{fmt(r.count)} шт</span>
+              <span className="font-medium">{fmt(Number(r.amount))} $</span>
+              <button
+                type="button"
+                onClick={() => startTransition(() => deleteProductSale(r.id, projectId))}
+                className="text-muted-foreground hover:text-destructive"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-xs text-muted-foreground">Ще немає продажів. Додай рядок вище — оберіть продукт.</p>
+      )}
     </div>
   )
 }
@@ -1094,7 +1372,7 @@ function StageMetricsTable({
           {metrics.map((m) => {
             const fact = metricFact(m, log, allMetrics)
             const pct = m.plan_value > 0 ? Math.round((fact / Number(m.plan_value)) * 100) : 0
-            const isComputed = isAutoMetric(m)
+            const isComputed = isAutoMetric(m, allMetrics)
             return (
               <tr key={m.id} className="hover:bg-muted/10">
                 <td className="px-3 py-1">
@@ -1234,7 +1512,13 @@ function FunnelLog({
 }) {
   const [addOpen, setAddOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const editableMetrics = funnel.metrics.filter((m) => !isAutoMetric(m))
+  // При мульти-продукті payment-метрики авто-сумуються з funnel_product_sales
+  const multiProduct = funnel.product_ids.length > 1
+  const editableMetrics = funnel.metrics.filter((m) => {
+    if (isAutoMetric(m, funnel.metrics)) return false
+    if (multiProduct && m.stage_group?.startsWith('payment')) return false
+    return true
+  })
 
   return (
     <div className="space-y-2">
@@ -1442,11 +1726,19 @@ function HistoryDialog({
     })
   }, [editableMetrics])
 
+  // Видимість метрик (за замовч. усі видимі). Зберігаємо ключі прихованих.
+  const [hidden, setHidden] = useState<Set<string>>(new Set())
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const visibleMetrics = useMemo(
+    () => orderedMetrics.filter((m) => !hidden.has(m.key)),
+    [orderedMetrics, hidden],
+  )
+
   // По кожній метриці: серія днів + сумма / макс
   const seriesByMetric = useMemo(() => {
     const out = new Map<string, { series: { day: string; value: number }[]; total: number; peak: number }>()
     const sortedLog = [...filteredLog].sort((a, b) => a.day_date.localeCompare(b.day_date))
-    for (const m of orderedMetrics) {
+    for (const m of visibleMetrics) {
       const series = sortedLog
         .map((r) => ({ day: r.day_date, value: Number(r.values?.[m.key]) || 0 }))
         .filter((p) => p.value !== 0)
@@ -1455,7 +1747,7 @@ function HistoryDialog({
       out.set(m.key, { series, total, peak })
     }
     return out
-  }, [orderedMetrics, filteredLog])
+  }, [visibleMetrics, filteredLog])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1486,8 +1778,51 @@ function HistoryDialog({
               <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="h-7 w-36" />
             </div>
           ) : null}
-          <span className="ml-auto text-xs text-muted-foreground">{filteredLog.length} записів</span>
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPickerOpen((v) => !v)}
+              className="rounded-md border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/30"
+            >
+              Показники {hidden.size > 0 ? `(${orderedMetrics.length - hidden.size}/${orderedMetrics.length})` : ''}
+            </button>
+            <span className="text-xs text-muted-foreground">{filteredLog.length} записів</span>
+          </div>
         </div>
+
+        {pickerOpen ? (
+          <div className="rounded-md border bg-card/40 p-2">
+            <div className="mb-1 flex items-center justify-between">
+              <div className="text-[11px] font-medium text-muted-foreground">Які показники показувати</div>
+              <div className="flex gap-2 text-[11px]">
+                <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setHidden(new Set())}>усі</button>
+                <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setHidden(new Set(orderedMetrics.map((m) => m.key)))}>жодного</button>
+              </div>
+            </div>
+            <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
+              {orderedMetrics.map((m) => {
+                const isOn = !hidden.has(m.key)
+                return (
+                  <label key={m.id} className="flex cursor-pointer items-center gap-1.5 text-[11px]">
+                    <input
+                      type="checkbox"
+                      checked={isOn}
+                      onChange={() => {
+                        setHidden((prev) => {
+                          const next = new Set(prev)
+                          if (isOn) next.add(m.key)
+                          else next.delete(m.key)
+                          return next
+                        })
+                      }}
+                    />
+                    <span className={cn('truncate', !isOn && 'text-muted-foreground line-through')}>{m.label}</span>
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+        ) : null}
 
         {/* Автоматичні розрахунки за період */}
         {derived.length > 0 ? (
@@ -1508,11 +1843,11 @@ function HistoryDialog({
         ) : null}
 
         {/* Всі метрики як міні-графіки */}
-        {orderedMetrics.length > 0 ? (
+        {visibleMetrics.length > 0 ? (
           <div>
             <div className="mb-1.5 text-xs font-medium text-muted-foreground">Метрики по днях</div>
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {orderedMetrics.map((m) => {
+              {visibleMetrics.map((m) => {
                 const s = seriesByMetric.get(m.key)
                 return (
                   <MetricMiniChart
@@ -1538,7 +1873,7 @@ function HistoryDialog({
                 <thead className="bg-muted/40 text-[10px] uppercase text-muted-foreground">
                   <tr>
                     <th className="sticky left-0 z-10 bg-muted/40 px-1.5 py-1.5 text-left">Дата</th>
-                    {orderedMetrics.map((m) => (
+                    {visibleMetrics.map((m) => (
                       <th key={m.id} className="px-1.5 py-1.5 text-right">
                         <div className="truncate">{m.label}</div>
                         {m.unit ? <div className="text-[9px] normal-case text-muted-foreground">{m.unit}</div> : null}
@@ -1552,7 +1887,7 @@ function HistoryDialog({
                   {[...filteredLog]
                     .sort((a, b) => b.day_date.localeCompare(a.day_date))
                     .map((row) => (
-                      <CompactLogRow key={row.id} row={row} metrics={orderedMetrics} funnelId={funnel.id} projectId={projectId} />
+                      <CompactLogRow key={row.id} row={row} metrics={visibleMetrics} funnelId={funnel.id} projectId={projectId} />
                     ))}
                 </tbody>
               </table>

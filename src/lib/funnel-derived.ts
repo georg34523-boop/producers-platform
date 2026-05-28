@@ -34,10 +34,14 @@ export function computeDerivedMetrics(
   const sum = (key: string) => sumByKey(log, key, inRange)
   const out: DerivedMetric[] = []
 
-  // Опорні значення
-  const spentM = metrics.find((m) => m.key === 'traffic__spent')
-  const impressionsM = metrics.find((m) => m.key === 'traffic__impressions')
-  const clicksM = metrics.find((m) => m.key === 'traffic__clicks')
+  // Опорні значення — підбираємо за роллю/stage_group, а не точними ключами
+  const spentM = findByRole(metrics, 'traffic_spend') ?? metrics.find((m) => m.key === 'traffic__spent')
+  const impressionsM =
+    metrics.find((m) => m.stage_group === 'traffic' && /impressions$/i.test(m.key)) ??
+    metrics.find((m) => m.key === 'traffic__impressions')
+  const clicksM =
+    metrics.find((m) => m.stage_group === 'traffic' && /clicks$/i.test(m.key)) ??
+    metrics.find((m) => m.key === 'traffic__clicks')
   // Заявки: спершу application.total (main + retry), якщо є — інакше будь-яка метрика з role='applications'
   const applicationTotal = metrics.find(
     (m) => m.stage_group === 'application' && m.computed_from && m.computed_from.length > 0,
@@ -45,8 +49,13 @@ export function computeDerivedMetrics(
   const fallbackApplicationsM = findByRole(metrics, 'applications')
   const applicationsM = applicationTotal ?? fallbackApplicationsM
   const revenueMain = metrics.find((m) => m.role === 'revenue' && m.stage_group?.startsWith('payment'))
-  const revenueMini = metrics.find((m) => m.role === 'revenue' && m.stage_group?.startsWith('mini_payment'))
+  const revenueMini = metrics.find(
+    (m) => m.role === 'revenue' && m.stage_group?.startsWith('mini_payment'),
+  )
   const salesMain = metrics.find((m) => m.role === 'sales' && m.stage_group?.startsWith('payment'))
+  const salesMini = metrics.find(
+    (m) => m.role === 'sales' && m.stage_group?.startsWith('mini_payment'),
+  )
 
   const spent = spentM ? sum(spentM.key) : 0
   const impressions = impressionsM ? sum(impressionsM.key) : 0
@@ -56,9 +65,11 @@ export function computeDerivedMetrics(
       ? applicationsM.computed_from.reduce((s, k) => s + sum(k), 0)
       : sum(applicationsM.key)
     : 0
-  const revenue =
-    (revenueMain ? sum(revenueMain.key) : 0) + (revenueMini ? sum(revenueMini.key) : 0)
+  const revenueMainAmount = revenueMain ? sum(revenueMain.key) : 0
+  const revenueMiniAmount = revenueMini ? sum(revenueMini.key) : 0
+  const revenue = revenueMainAmount + revenueMiniAmount
   const sales = salesMain ? sum(salesMain.key) : 0
+  const miniSales = salesMini ? sum(salesMini.key) : 0
 
   // Всього заявок (як перша цифра, найважливіша)
   if (applications > 0) {
@@ -93,9 +104,22 @@ export function computeDerivedMetrics(
   if (spent > 0) {
     out.push({ key: 'romi', label: 'ROMI', value: ((revenue - spent) / spent) * 100, unit: '%' })
   }
-  // Середній чек = revenue / sales
-  if (revenue > 0 && sales > 0) {
-    out.push({ key: 'avg_check', label: 'Середній чек', value: revenue / sales, unit: '$' })
+  // Середній чек = revenue (основний продукт) / sales (основний продукт)
+  if (revenueMainAmount > 0 && sales > 0) {
+    out.push({
+      key: 'avg_check',
+      label: 'Середній чек',
+      value: revenueMainAmount / sales,
+      unit: '$',
+      hint: 'Без врахування мини-продукту',
+    })
+  }
+  // Покупки міні-продукту: кількість і сума (коли є стейдж mini_payment)
+  if (miniSales > 0) {
+    out.push({ key: 'mini_count', label: 'Покупок мини', value: miniSales, unit: 'шт' })
+  }
+  if (revenueMiniAmount > 0) {
+    out.push({ key: 'mini_amount', label: 'Сума мини', value: revenueMiniAmount, unit: '$' })
   }
   return out
 }

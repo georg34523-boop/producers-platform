@@ -6,6 +6,8 @@ import type {
   FunnelDailyLog,
   FunnelMetric,
   FunnelMiniPrice,
+  FunnelProductSale,
+  FunnelReactivation,
   MonthlyTracker,
   TrackerCustomDriver,
   TrackerWeeklyPlan,
@@ -100,6 +102,9 @@ export type FunnelWithDetail = Funnel & {
   metrics: FunnelMetric[]
   log: FunnelDailyLog[]
   product_ids: string[]
+  product_sales: FunnelProductSale[]
+  reactivations_out: FunnelReactivation[]
+  reactivations_in: FunnelReactivation[]
 }
 
 export async function getFunnels(trackerId: string): Promise<FunnelWithDetail[]> {
@@ -111,7 +116,8 @@ export async function getFunnels(trackerId: string): Promise<FunnelWithDetail[]>
        mini_prices:funnel_mini_prices(*),
        metrics:funnel_metrics(*),
        log:funnel_daily_log(*),
-       funnel_products(product_id)`,
+       funnel_products(product_id),
+       product_sales:funnel_product_sales(*)`,
     )
     .eq('tracker_id', trackerId)
     .order('position')
@@ -121,13 +127,33 @@ export async function getFunnels(trackerId: string): Promise<FunnelWithDetail[]>
     metrics: FunnelMetric[]
     log: FunnelDailyLog[]
     funnel_products: { product_id: string }[]
+    product_sales: FunnelProductSale[]
   }
-  return ((data ?? []) as unknown as Raw[]).map((f) => ({
+  const funnels = (data ?? []) as unknown as Raw[]
+  const funnelIds = funnels.map((f) => f.id)
+
+  let reactivations: FunnelReactivation[] = []
+  if (funnelIds.length > 0) {
+    const { data: r } = await supabase
+      .from('funnel_reactivations')
+      .select('*')
+      .or(
+        `source_funnel_id.in.(${funnelIds.join(',')}),target_funnel_id.in.(${funnelIds.join(',')})`,
+      )
+    reactivations = (r ?? []) as FunnelReactivation[]
+  }
+
+  return funnels.map((f) => ({
     ...f,
     mini_prices: [...f.mini_prices].sort((a, b) => a.position - b.position),
     metrics: [...f.metrics].sort((a, b) => a.position - b.position),
     log: [...f.log].sort((a, b) => a.day_date.localeCompare(b.day_date)),
     product_ids: f.funnel_products.map((fp) => fp.product_id),
+    product_sales: [...(f.product_sales ?? [])].sort((a, b) =>
+      a.day_date.localeCompare(b.day_date),
+    ),
+    reactivations_out: reactivations.filter((r) => r.source_funnel_id === f.id),
+    reactivations_in: reactivations.filter((r) => r.target_funnel_id === f.id),
   }))
 }
 

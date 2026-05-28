@@ -131,9 +131,9 @@ export const STAGE_LIBRARY: StageTemplate[] = [
       { key: 'total', label: 'Всього прийшли', role: 'other', unit: 'шт' },
       { key: 'peak', label: 'Пік онлайн', role: 'other', unit: 'шт' },
       { key: 'reached', label: 'Дійшли до продажу', role: 'other', unit: 'шт' },
-      { key: 'applications', label: 'Заявки з вебінару', role: 'other', unit: 'шт' },
+      { key: 'applications', label: 'Заявки з вебінару', role: 'applications', unit: 'шт' },
     ],
-    hint: 'Може бути до 3 разів у одній воронці (Вебінар 1, 2, 3).',
+    hint: 'Може бути до 3 разів у одній воронці (Вебінар 1, 2, 3). «Заявки» сумуються в Application.main автоматично.',
   },
   {
     template: 'autowebinar',
@@ -143,8 +143,9 @@ export const STAGE_LIBRARY: StageTemplate[] = [
     metrics: [
       { key: 'total', label: 'Всього відкрили', role: 'other', unit: 'шт' },
       { key: 'reached', label: 'Дійшли до продажу', role: 'other', unit: 'шт' },
-      { key: 'applications', label: 'Заявки з автовебу', role: 'other', unit: 'шт' },
+      { key: 'applications', label: 'Заявки з автовебу', role: 'applications', unit: 'шт' },
     ],
+    hint: '«Заявки» сумуються в Application.main автоматично.',
   },
   {
     template: 'bot_chain',
@@ -157,6 +158,21 @@ export const STAGE_LIBRARY: StageTemplate[] = [
     label: 'Подивився VSL до кінця',
     group: 'warmup',
     metrics: [{ key: 'count', label: 'Додивились', role: 'other', unit: 'шт' }],
+  },
+  {
+    template: 'lesson_watched',
+    label: 'Подивився урок',
+    group: 'warmup',
+    variants: 5,
+    metrics: [{ key: 'count', label: 'Переглядів', role: 'other', unit: 'шт' }],
+    hint: 'Можна додати кілька уроків (Урок #1, #2, …) для безкоштовних воронок з мікро-курсом.',
+  },
+  {
+    template: 'mini_completed',
+    label: 'Пройшов мини-продукт',
+    group: 'warmup',
+    metrics: [{ key: 'count', label: 'Пройшли', role: 'other', unit: 'шт' }],
+    hint: 'Скільки людей пройшли мини-курс / VSL до кінця.',
   },
 
   // --- C. Кваліфікація ---

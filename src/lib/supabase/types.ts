@@ -168,6 +168,25 @@ export interface FunnelDailyLog {
   updated_at: string
 }
 
+export interface FunnelReactivation {
+  id: string
+  source_funnel_id: string
+  target_funnel_id: string
+  day_date: string
+  count: number
+  created_at: string
+}
+
+export interface FunnelProductSale {
+  id: string
+  funnel_id: string
+  product_id: string
+  day_date: string
+  count: number
+  amount: number
+  created_at: string
+}
+
 export interface ProjectExpense {
   id: string
   project_id: string
