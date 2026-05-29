@@ -788,7 +788,6 @@ function FunnelDetail({
   year: number
   month: number
 }) {
-  const hasReactivationOut = funnel.metrics.some((m) => m.stage_group === 'reactivation_out')
   const attachedProducts = useMemo(
     () => products.filter((p) => funnel.product_ids.includes(p.id)),
     [products, funnel.product_ids],
@@ -805,10 +804,10 @@ function FunnelDetail({
       {attachedProducts.length > 1 ? (
         <ProductSalesSection funnel={funnel} projectId={projectId} products={attachedProducts} year={year} month={month} />
       ) : null}
-      {hasReactivationOut ? (
+      {otherFunnels.length > 0 ? (
         <ReactivationOutSection funnel={funnel} projectId={projectId} otherFunnels={otherFunnels} year={year} month={month} />
       ) : null}
-      <FunnelLog funnel={funnel} projectId={projectId} year={year} month={month} />
+      <FunnelLog funnel={funnel} projectId={projectId} year={year} month={month} products={attachedProducts.length > 0 ? attachedProducts : products} />
     </div>
   )
 }
@@ -1504,38 +1503,42 @@ function FunnelLog({
   projectId,
   year,
   month,
+  products,
 }: {
   funnel: FullFunnel
   projectId: string
   year: number
   month: number
+  products: Product[]
 }) {
   const [addOpen, setAddOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
-  // При мульти-продукті payment-метрики авто-сумуються з funnel_product_sales
-  const multiProduct = funnel.product_ids.length > 1
+  // payment-стейдж тепер живе в окремій секції «Оплата основного» з пікером продукту,
+  // тому в звичайних метриках його ховаємо.
   const editableMetrics = funnel.metrics.filter((m) => {
     if (isAutoMetric(m, funnel.metrics)) return false
-    if (multiProduct && m.stage_group?.startsWith('payment')) return false
+    if (m.stage_group === 'payment') return false
     return true
   })
+  const hasPaymentStage = funnel.metrics.some((m) => m.stage_group === 'payment')
+  const canOpenDay = editableMetrics.length > 0 || hasPaymentStage
 
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <div className="text-sm font-medium">Журнал по днях</div>
         <div className="flex gap-2">
-          <Button size="sm" variant="outline" disabled={editableMetrics.length === 0} onClick={() => setHistoryOpen(true)}>
+          <Button size="sm" variant="outline" disabled={!canOpenDay} onClick={() => setHistoryOpen(true)}>
             Історія
           </Button>
-          <Button size="sm" disabled={editableMetrics.length === 0} onClick={() => setAddOpen(true)}>
+          <Button size="sm" disabled={!canOpenDay} onClick={() => setAddOpen(true)}>
             <Plus className="mr-1 h-3.5 w-3.5" />
             Внести дані за день
           </Button>
         </div>
       </div>
 
-      {editableMetrics.length === 0 ? (
+      {!canOpenDay ? (
         <p className="text-xs text-muted-foreground">Додай етапи з бібліотеки — і зʼявиться можливість вести журнал.</p>
       ) : funnel.log.length === 0 ? (
         <p className="text-xs text-muted-foreground">Записів ще немає. Натисни «Внести дані за день».</p>
@@ -1552,6 +1555,8 @@ function FunnelLog({
         year={year}
         month={month}
         editableMetrics={editableMetrics}
+        hasPaymentStage={hasPaymentStage}
+        products={products}
         open={addOpen}
         onOpenChange={setAddOpen}
       />
@@ -1573,6 +1578,8 @@ function AddDayDialog({
   year,
   month,
   editableMetrics,
+  hasPaymentStage,
+  products,
   open,
   onOpenChange,
 }: {
@@ -1581,6 +1588,8 @@ function AddDayDialog({
   year: number
   month: number
   editableMetrics: FunnelMetric[]
+  hasPaymentStage: boolean
+  products: Product[]
   open: boolean
   onOpenChange: (o: boolean) => void
 }) {
@@ -1588,6 +1597,9 @@ function AddDayDialog({
   const [day, setDay] = useState(dayIso(year, month, new Date().getUTCDate()))
   const [values, setValues] = useState<Record<string, string>>({})
   const [comment, setComment] = useState('')
+  const [payProduct, setPayProduct] = useState<string>(products[0]?.id ?? '')
+  const [payCount, setPayCount] = useState('')
+  const [payAmount, setPayAmount] = useState('')
 
   // Якщо для цього дня вже є запис — підставимо
   const existing = funnel.log.find((r) => r.day_date === day)
@@ -1604,7 +1616,31 @@ function AddDayDialog({
       setValues({})
       setComment('')
     }
-  }, [day, existing, editableMetrics])
+    // скидаємо чернетку payment при зміні дня
+    setPayCount('')
+    setPayAmount('')
+    if (!payProduct && products[0]) setPayProduct(products[0].id)
+  }, [day, existing, editableMetrics, products])
+
+  // Продажі продуктів за обраний день
+  const todaySales = funnel.product_sales.filter((s) => s.day_date === day)
+
+  const addPaymentRow = async () => {
+    if (!payProduct) return
+    const c = Number(payCount)
+    const a = Number(payAmount)
+    if ((!Number.isFinite(c) || c <= 0) && (!Number.isFinite(a) || a <= 0)) return
+    await upsertProductSale({
+      funnel_id: funnel.id,
+      project_id: projectId,
+      product_id: payProduct,
+      day_date: day,
+      count: Number.isFinite(c) ? c : 0,
+      amount: Number.isFinite(a) ? a : 0,
+    })
+    setPayCount('')
+    setPayAmount('')
+  }
 
   const submit = () => {
     const vals: Record<string, number> = {}
@@ -1614,12 +1650,17 @@ function AddDayDialog({
     }
     startTransition(async () => {
       await upsertDailyLog(funnel.id, projectId, day, vals, comment || null)
+      // якщо у формі payment-чернетка заповнена — теж зберігаємо
+      if ((Number(payCount) > 0 || Number(payAmount) > 0) && payProduct) {
+        await addPaymentRow()
+      }
       onOpenChange(false)
     })
   }
 
   // Групуємо за етапами для зручності
   const grouped = groupedByStage(editableMetrics)
+  const productName = new Map(products.map((p) => [p.id, p.name]))
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1659,6 +1700,88 @@ function AddDayDialog({
               </div>
             </div>
           ))}
+
+          {hasPaymentStage ? (
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-muted-foreground">Оплата основного продукту</div>
+              {products.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Спершу прив'яжи хоча б один продукт у налаштуваннях воронки.
+                </p>
+              ) : (
+                <>
+                  {todaySales.length > 0 ? (
+                    <ul className="divide-y rounded-md border bg-background text-xs">
+                      {todaySales.map((s) => (
+                        <li key={s.id} className="flex items-center justify-between gap-2 px-2 py-1.5">
+                          <span className="flex-1 truncate">{productName.get(s.product_id) ?? '—'}</span>
+                          <span>{fmt(s.count)} шт</span>
+                          <span className="font-medium">{fmt(Number(s.amount))} $</span>
+                          <button
+                            type="button"
+                            onClick={() => startTransition(() => deleteProductSale(s.id, projectId))}
+                            className="text-muted-foreground hover:text-destructive"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  <div
+                    className={cn(
+                      'grid gap-2 rounded-md border bg-background p-2',
+                      products.length > 1
+                        ? 'grid-cols-[1fr_70px_90px_auto]'
+                        : 'grid-cols-[1fr_90px_auto]',
+                    )}
+                  >
+                    {products.length > 1 ? (
+                      <select
+                        value={payProduct}
+                        onChange={(e) => setPayProduct(e.target.value)}
+                        className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                      >
+                        {products.map((p) => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div className="flex h-8 items-center px-2 text-xs text-muted-foreground">
+                        {products[0]?.name}
+                      </div>
+                    )}
+                    <Input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={payCount}
+                      onChange={(e) => setPayCount(e.target.value)}
+                      placeholder="К-сть"
+                      className="h-8 text-xs"
+                    />
+                    <Input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={payAmount}
+                      onChange={(e) => setPayAmount(e.target.value)}
+                      placeholder="$"
+                      className="h-8 text-xs"
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!payProduct || (!payCount && !payAmount)}
+                      onClick={() => startTransition(() => addPaymentRow())}
+                    >
+                      +
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : null}
 
           <div className="space-y-1">
             <Label className="text-xs">Коментар (опц.)</Label>

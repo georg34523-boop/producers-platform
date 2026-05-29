@@ -296,6 +296,9 @@ const GROUP_PRIORITY: Record<StageGroup, number> = {
 export function stageFlowPriority(stageGroup: string): number {
   if (stageGroup === 'traffic') return 0
   const base = stageGroup.replace(/_(\d+)$/, '')
+  // mini_payment — перед заявками (qualification), щоб у трипвайр-воронці
+  // спершу оплата мини, потім заявка на основний продукт.
+  if (base === 'mini_payment') return 2.5
   const tpl = STAGE_LIBRARY.find((s) => s.template === base)
   return tpl ? GROUP_PRIORITY[tpl.group] : 99
 }

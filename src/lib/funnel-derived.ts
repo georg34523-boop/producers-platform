@@ -34,14 +34,19 @@ export function computeDerivedMetrics(
   const sum = (key: string) => sumByKey(log, key, inRange)
   const out: DerivedMetric[] = []
 
-  // Опорні значення — підбираємо за роллю/stage_group, а не точними ключами
-  const spentM = findByRole(metrics, 'traffic_spend') ?? metrics.find((m) => m.key === 'traffic__spent')
+  // Опорні значення — підбираємо за роллю/stage_group/лейблом, а не точними ключами
+  const spentM =
+    findByRole(metrics, 'traffic_spend') ??
+    metrics.find((m) => m.key === 'traffic__spent') ??
+    metrics.find((m) => /витрач|spent|cost/i.test(m.label))
   const impressionsM =
     metrics.find((m) => m.stage_group === 'traffic' && /impressions$/i.test(m.key)) ??
-    metrics.find((m) => m.key === 'traffic__impressions')
+    metrics.find((m) => m.key === 'traffic__impressions') ??
+    metrics.find((m) => /показ|impression/i.test(m.label))
   const clicksM =
     metrics.find((m) => m.stage_group === 'traffic' && /clicks$/i.test(m.key)) ??
-    metrics.find((m) => m.key === 'traffic__clicks')
+    metrics.find((m) => m.key === 'traffic__clicks') ??
+    metrics.find((m) => /кл.к|click/i.test(m.label))
   // Заявки: спершу application.total (main + retry), якщо є — інакше будь-яка метрика з role='applications'
   const applicationTotal = metrics.find(
     (m) => m.stage_group === 'application' && m.computed_from && m.computed_from.length > 0,
