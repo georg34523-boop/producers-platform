@@ -94,31 +94,32 @@ export const STAGE_LIBRARY: StageTemplate[] = [
     template: 'webinar_reg',
     label: 'Реєстрація на вебінар',
     group: 'entry',
-    metrics: [{ key: 'count', label: 'Реєстрацій', role: 'applications', unit: 'шт' }],
+    metrics: [{ key: 'count', label: 'Ліди', role: 'applications', unit: 'шт' }],
   },
   {
     template: 'autowebinar_reg',
     label: 'Реєстрація на автовебінар',
     group: 'entry',
-    metrics: [{ key: 'count', label: 'Реєстрацій', role: 'applications', unit: 'шт' }],
+    metrics: [{ key: 'count', label: 'Ліди', role: 'applications', unit: 'шт' }],
   },
   {
     template: 'lead_magnet_open',
     label: 'Відкриття лід-магніту',
     group: 'entry',
-    metrics: [{ key: 'count', label: 'Скачали', role: 'applications', unit: 'шт' }],
+    metrics: [{ key: 'count', label: 'Ліди', role: 'applications', unit: 'шт' }],
   },
   {
     template: 'vsl_view',
     label: 'Перегляд VSL відео',
     group: 'entry',
     metrics: [{ key: 'count', label: 'Перегляди', role: 'applications', unit: 'шт' }],
+    hint: 'Перегляди початку відео (для трипвайр-воронок). У VSL-воронці не використовується.',
   },
   {
     template: 'landing_open',
-    label: 'Відкриття лендингу',
+    label: 'Перехід на лендинг',
     group: 'entry',
-    metrics: [{ key: 'count', label: 'Відкрили', role: 'applications', unit: 'шт' }],
+    metrics: [{ key: 'count', label: 'Ліди', role: 'applications', unit: 'шт' }],
   },
 
   // --- B. Прогрів ---
@@ -319,7 +320,7 @@ export const TRAFFIC_CHANNELS = [
 export const FUNNEL_DEFAULTS: Record<FunnelType, string[]> = {
   webinar: ['webinar_reg', 'webinar', 'application', 'payment'],
   autowebinar: ['autowebinar_reg', 'autowebinar', 'application', 'payment'],
-  vsl: ['vsl_view', 'vsl_watched', 'application', 'payment'],
+  vsl: ['vsl_watched', 'application', 'payment'],
   tripwire: ['vsl_view', 'mini_payment', 'application', 'payment'],
   subscription: ['subscribe_instagram'],
   lead_magnet: ['lead_magnet_open', 'application', 'payment'],
