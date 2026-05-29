@@ -807,7 +807,14 @@ function FunnelDetail({
       {otherFunnels.length > 0 ? (
         <ReactivationOutSection funnel={funnel} projectId={projectId} otherFunnels={otherFunnels} year={year} month={month} />
       ) : null}
-      <FunnelLog funnel={funnel} projectId={projectId} year={year} month={month} products={attachedProducts.length > 0 ? attachedProducts : products} />
+      <FunnelLog
+        funnel={funnel}
+        projectId={projectId}
+        year={year}
+        month={month}
+        products={attachedProducts.length > 0 ? attachedProducts : products}
+        otherFunnels={otherFunnels}
+      />
     </div>
   )
 }
@@ -1504,12 +1511,14 @@ function FunnelLog({
   year,
   month,
   products,
+  otherFunnels,
 }: {
   funnel: FullFunnel
   projectId: string
   year: number
   month: number
   products: Product[]
+  otherFunnels: FullFunnel[]
 }) {
   const [addOpen, setAddOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -1557,6 +1566,7 @@ function FunnelLog({
         editableMetrics={editableMetrics}
         hasPaymentStage={hasPaymentStage}
         products={products}
+        otherFunnels={otherFunnels}
         open={addOpen}
         onOpenChange={setAddOpen}
       />
@@ -1580,6 +1590,7 @@ function AddDayDialog({
   editableMetrics,
   hasPaymentStage,
   products,
+  otherFunnels,
   open,
   onOpenChange,
 }: {
@@ -1590,6 +1601,7 @@ function AddDayDialog({
   editableMetrics: FunnelMetric[]
   hasPaymentStage: boolean
   products: Product[]
+  otherFunnels: FullFunnel[]
   open: boolean
   onOpenChange: (o: boolean) => void
 }) {
@@ -1600,6 +1612,8 @@ function AddDayDialog({
   const [payProduct, setPayProduct] = useState<string>(products[0]?.id ?? '')
   const [payCount, setPayCount] = useState('')
   const [payAmount, setPayAmount] = useState('')
+  const [reactTarget, setReactTarget] = useState<string>(otherFunnels[0]?.id ?? '')
+  const [reactCount, setReactCount] = useState('')
 
   // Якщо для цього дня вже є запис — підставимо
   const existing = funnel.log.find((r) => r.day_date === day)
@@ -1616,14 +1630,19 @@ function AddDayDialog({
       setValues({})
       setComment('')
     }
-    // скидаємо чернетку payment при зміні дня
+    // скидаємо чернетку payment + реактивації при зміні дня
     setPayCount('')
     setPayAmount('')
+    setReactCount('')
     if (!payProduct && products[0]) setPayProduct(products[0].id)
-  }, [day, existing, editableMetrics, products])
+    if (!reactTarget && otherFunnels[0]) setReactTarget(otherFunnels[0].id)
+  }, [day, existing, editableMetrics, products, otherFunnels])
 
   // Продажі продуктів за обраний день
   const todaySales = funnel.product_sales.filter((s) => s.day_date === day)
+  // Переноси з реактивації за обраний день
+  const todayReact = funnel.reactivations_out.filter((r) => r.day_date === day)
+  const funnelNameById = new Map(otherFunnels.map((f) => [f.id, f.name]))
 
   const addPaymentRow = async () => {
     if (!payProduct) return
@@ -1642,6 +1661,20 @@ function AddDayDialog({
     setPayAmount('')
   }
 
+  const addReactivationRow = async () => {
+    if (!reactTarget) return
+    const c = Number(reactCount)
+    if (!Number.isFinite(c) || c <= 0) return
+    await upsertReactivation({
+      source_funnel_id: funnel.id,
+      target_funnel_id: reactTarget,
+      project_id: projectId,
+      day_date: day,
+      count: c,
+    })
+    setReactCount('')
+  }
+
   const submit = () => {
     const vals: Record<string, number> = {}
     for (const m of editableMetrics) {
@@ -1653,6 +1686,10 @@ function AddDayDialog({
       // якщо у формі payment-чернетка заповнена — теж зберігаємо
       if ((Number(payCount) > 0 || Number(payAmount) > 0) && payProduct) {
         await addPaymentRow()
+      }
+      // якщо чернетка реактивації заповнена — теж зберігаємо
+      if (Number(reactCount) > 0 && reactTarget) {
+        await addReactivationRow()
       }
       onOpenChange(false)
     })
@@ -1780,6 +1817,57 @@ function AddDayDialog({
                   </div>
                 </>
               )}
+            </div>
+          ) : null}
+
+          {otherFunnels.length > 0 ? (
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-muted-foreground">Реактивація: куди передали лідів</div>
+              {todayReact.length > 0 ? (
+                <ul className="divide-y rounded-md border bg-background text-xs">
+                  {todayReact.map((r) => (
+                    <li key={r.id} className="flex items-center justify-between gap-2 px-2 py-1.5">
+                      <span className="flex-1 truncate">→ {funnelNameById.get(r.target_funnel_id) ?? '—'}</span>
+                      <span className="font-medium">{fmt(r.count)}</span>
+                      <button
+                        type="button"
+                        onClick={() => startTransition(() => deleteReactivation(r.id, projectId))}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <div className="grid grid-cols-[1fr_90px_auto] gap-2 rounded-md border bg-background p-2">
+                <select
+                  value={reactTarget}
+                  onChange={(e) => setReactTarget(e.target.value)}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                >
+                  {otherFunnels.map((f) => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
+                  ))}
+                </select>
+                <Input
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={reactCount}
+                  onChange={(e) => setReactCount(e.target.value)}
+                  placeholder="К-сть"
+                  className="h-8 text-xs"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!reactTarget || !reactCount}
+                  onClick={() => startTransition(() => addReactivationRow())}
+                >
+                  +
+                </Button>
+              </div>
             </div>
           ) : null}
 
