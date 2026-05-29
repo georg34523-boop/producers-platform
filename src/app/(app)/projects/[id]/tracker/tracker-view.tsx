@@ -1522,11 +1522,12 @@ function FunnelLog({
 }) {
   const [addOpen, setAddOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
-  // payment-стейдж тепер живе в окремій секції «Оплата основного» з пікером продукту,
-  // тому в звичайних метриках його ховаємо.
+  // payment-стейдж і reactivation_out тепер живуть в окремих секціях день-діалогу,
+  // тому в звичайних метриках їх ховаємо.
   const editableMetrics = funnel.metrics.filter((m) => {
     if (isAutoMetric(m, funnel.metrics)) return false
     if (m.stage_group === 'payment') return false
+    if (m.stage_group === 'reactivation_out') return false
     return true
   })
   const hasPaymentStage = funnel.metrics.some((m) => m.stage_group === 'payment')
@@ -1738,6 +1739,57 @@ function AddDayDialog({
             </div>
           ))}
 
+          {otherFunnels.length > 0 ? (
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-muted-foreground">Реактивація: куди передали лідів</div>
+              {todayReact.length > 0 ? (
+                <ul className="divide-y rounded-md border bg-background text-xs">
+                  {todayReact.map((r) => (
+                    <li key={r.id} className="flex items-center justify-between gap-2 px-2 py-1.5">
+                      <span className="flex-1 truncate">→ {funnelNameById.get(r.target_funnel_id) ?? '—'}</span>
+                      <span className="font-medium">{fmt(r.count)}</span>
+                      <button
+                        type="button"
+                        onClick={() => startTransition(() => deleteReactivation(r.id, projectId))}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <div className="grid grid-cols-[1fr_90px_auto] gap-2 rounded-md border bg-background p-2">
+                <select
+                  value={reactTarget}
+                  onChange={(e) => setReactTarget(e.target.value)}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                >
+                  {otherFunnels.map((f) => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
+                  ))}
+                </select>
+                <Input
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={reactCount}
+                  onChange={(e) => setReactCount(e.target.value)}
+                  placeholder="К-сть"
+                  className="h-8 text-xs"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!reactTarget || !reactCount}
+                  onClick={() => startTransition(() => addReactivationRow())}
+                >
+                  +
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
           {hasPaymentStage ? (
             <div className="space-y-1">
               <div className="text-xs font-medium text-muted-foreground">Оплата основного продукту</div>
@@ -1817,57 +1869,6 @@ function AddDayDialog({
                   </div>
                 </>
               )}
-            </div>
-          ) : null}
-
-          {otherFunnels.length > 0 ? (
-            <div className="space-y-1">
-              <div className="text-xs font-medium text-muted-foreground">Реактивація: куди передали лідів</div>
-              {todayReact.length > 0 ? (
-                <ul className="divide-y rounded-md border bg-background text-xs">
-                  {todayReact.map((r) => (
-                    <li key={r.id} className="flex items-center justify-between gap-2 px-2 py-1.5">
-                      <span className="flex-1 truncate">→ {funnelNameById.get(r.target_funnel_id) ?? '—'}</span>
-                      <span className="font-medium">{fmt(r.count)}</span>
-                      <button
-                        type="button"
-                        onClick={() => startTransition(() => deleteReactivation(r.id, projectId))}
-                        className="text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              <div className="grid grid-cols-[1fr_90px_auto] gap-2 rounded-md border bg-background p-2">
-                <select
-                  value={reactTarget}
-                  onChange={(e) => setReactTarget(e.target.value)}
-                  className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                >
-                  {otherFunnels.map((f) => (
-                    <option key={f.id} value={f.id}>{f.name}</option>
-                  ))}
-                </select>
-                <Input
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={reactCount}
-                  onChange={(e) => setReactCount(e.target.value)}
-                  placeholder="К-сть"
-                  className="h-8 text-xs"
-                />
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={!reactTarget || !reactCount}
-                  onClick={() => startTransition(() => addReactivationRow())}
-                >
-                  +
-                </Button>
-              </div>
             </div>
           ) : null}
 
