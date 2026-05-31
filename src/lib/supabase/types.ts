@@ -187,6 +187,31 @@ export interface FunnelProductSale {
   created_at: string
 }
 
+export type TaskStatus = 'todo' | 'doing' | 'done'
+
+export interface ProjectTaskGroup {
+  id: string
+  project_id: string
+  name: string
+  is_seed: boolean
+  position: number
+  created_at: string
+}
+
+export interface ProjectTask {
+  id: string
+  project_id: string
+  group_id: string | null
+  title: string
+  status: TaskStatus
+  deadline: string | null
+  comment: string | null
+  linked_goal_id: string | null
+  position: number
+  created_at: string
+  created_by: string | null
+}
+
 export interface ProjectExpense {
   id: string
   project_id: string

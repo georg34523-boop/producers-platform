@@ -9,6 +9,7 @@ const TABS = [
   { suffix: '', label: 'Обзор' },
   { suffix: '/products', label: 'Продукты' },
   { suffix: '/tracker', label: 'Трекер месяца' },
+  { suffix: '/tasks', label: 'Задачі' },
   { suffix: '/units', label: 'Юниты' },
 ] as const
 

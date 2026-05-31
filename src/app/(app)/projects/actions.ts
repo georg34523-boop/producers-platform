@@ -55,6 +55,17 @@ export async function createProject(
     .single()
   if (error) return { error: error.message }
 
+  // Сід дефолтних груп задач (мають збігатись з міграцією 0013)
+  await supabase.from('project_task_groups').insert(
+    [
+      { project_id: data.id, name: 'Продукт', is_seed: true, position: 0 },
+      { project_id: data.id, name: 'Воронки', is_seed: true, position: 1 },
+      { project_id: data.id, name: 'Трафік', is_seed: true, position: 2 },
+      { project_id: data.id, name: 'Комунікація', is_seed: true, position: 3 },
+      { project_id: data.id, name: 'Аналітика', is_seed: true, position: 4 },
+    ],
+  )
+
   revalidatePath('/projects')
   revalidatePath('/')
   redirect(`/projects/${data.id}`)
