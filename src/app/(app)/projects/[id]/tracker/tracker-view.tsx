@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useTransition } from 'react'
 import Link from 'next/link'
-import { ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Plus, Trash2 } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -31,7 +31,6 @@ import {
   TRAFFIC_CHANNELS,
   TRAFFIC_FIELDS,
   metricKeyFor,
-  stageFlowPriority,
 } from '@/lib/funnel-library'
 import { LAUNCH_STATUS_LABEL, MONTH_LABEL_RU } from '@/lib/labels'
 import type {
@@ -60,6 +59,7 @@ import {
   deleteProductSale,
   deleteReactivation,
   deleteStage,
+  moveStage,
   setFunnelProducts,
   setWeeklyPlan,
   updateFunnel,
@@ -170,8 +170,8 @@ function metricFact(m: FunnelMetric, log: FunnelDailyLog[], allMetrics?: FunnelM
 }
 
 function groupedByStage(metrics: FunnelMetric[]) {
-  // Возвращает массив { stage_group, label, metrics[] }
-  // Порядок: traffic → entry → warmup → qualification → payment → special
+  // Порядок: traffic завжди першим, далі — за position першої метрики стейджу
+  // (це position є джерелом істини після ручного перетягування).
   const groups = new Map<string, FunnelMetric[]>()
   for (const m of [...metrics].sort((a, b) => a.position - b.position)) {
     const sg = m.stage_group ?? 'other'
@@ -179,10 +179,8 @@ function groupedByStage(metrics: FunnelMetric[]) {
     groups.get(sg)!.push(m)
   }
   const sgs = [...groups.keys()].sort((a, b) => {
-    const pa = stageFlowPriority(a)
-    const pb = stageFlowPriority(b)
-    if (pa !== pb) return pa - pb
-    // якщо однакові — за position першої метрики
+    if (a === 'traffic' && b !== 'traffic') return -1
+    if (b === 'traffic' && a !== 'traffic') return 1
     return (groups.get(a)![0]?.position ?? 0) - (groups.get(b)![0]?.position ?? 0)
   })
   return sgs.map((sg) => {
@@ -1319,12 +1317,32 @@ function FunnelStages({ funnel, projectId }: { funnel: FullFunnel; projectId: st
       {stages.filter((s) => s.stage_group !== 'traffic').length === 0 ? (
         <p className="text-sm text-muted-foreground">Етапів немає. Додай з бібліотеки.</p>
       ) : (
-        stages
-          .filter((s) => s.stage_group !== 'traffic')
-          .map((s) => (
+        (() => {
+          const nonTraffic = stages.filter((s) => s.stage_group !== 'traffic')
+          return nonTraffic.map((s, i) => (
             <div key={s.stage_group} className="rounded-md border bg-card/40 p-3">
-              <div className="mb-2 flex items-center justify-between">
-                <div className="text-sm font-medium">{s.label}</div>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    disabled={i === 0}
+                    onClick={() => startTransition(() => moveStage(funnel.id, projectId, s.stage_group, 'up'))}
+                    className="rounded p-0.5 text-muted-foreground hover:bg-muted/40 hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent"
+                    title="Підняти"
+                  >
+                    <ChevronUp className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={i === nonTraffic.length - 1}
+                    onClick={() => startTransition(() => moveStage(funnel.id, projectId, s.stage_group, 'down'))}
+                    className="rounded p-0.5 text-muted-foreground hover:bg-muted/40 hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent"
+                    title="Опустити"
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </button>
+                  <div className="ml-1 text-sm font-medium">{s.label}</div>
+                </div>
                 <button
                   type="button"
                   onClick={() => {
@@ -1340,6 +1358,7 @@ function FunnelStages({ funnel, projectId }: { funnel: FullFunnel; projectId: st
               <StageMetricsTable metrics={s.metrics} log={funnel.log} projectId={projectId} allMetrics={funnel.metrics} showPlans={showPlans} />
             </div>
           ))
+        })()
       )}
 
       <LibraryDialog funnelId={funnel.id} projectId={projectId} existingGroups={new Set(stages.map((s) => s.stage_group.replace(/_(\d+)$/, '')))} open={libOpen} onOpenChange={setLibOpen} />
@@ -1928,14 +1947,9 @@ function HistoryDialog({
     [funnel.metrics, funnel.log, from, to],
   )
 
-  // Сортування за потоком
+  // Сортування за position (ручний порядок стейджів є джерелом істини)
   const orderedMetrics = useMemo(() => {
-    return [...editableMetrics].sort((a, b) => {
-      const pa = stageFlowPriority(a.stage_group ?? 'other')
-      const pb = stageFlowPriority(b.stage_group ?? 'other')
-      if (pa !== pb) return pa - pb
-      return a.position - b.position
-    })
+    return [...editableMetrics].sort((a, b) => a.position - b.position)
   }, [editableMetrics])
 
   // Видимість метрик (за замовч. усі видимі). Зберігаємо ключі прихованих.

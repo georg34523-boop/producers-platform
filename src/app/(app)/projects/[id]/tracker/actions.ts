@@ -424,6 +424,57 @@ export async function deleteStage(
   revalidate(projectId)
 }
 
+/** Перемістити стейдж вгору/вниз. Свапає його з сусіднім (нетрафік) стейджем. */
+export async function moveStage(
+  funnelId: string,
+  projectId: string,
+  stageGroup: string,
+  direction: 'up' | 'down',
+): Promise<void> {
+  await requireProfile()
+  if (stageGroup === 'traffic') return // traffic завжди першим
+  const supabase = await createClient()
+  const { data: metrics } = await supabase
+    .from('funnel_metrics')
+    .select('id, stage_group, position')
+    .eq('funnel_id', funnelId)
+    .order('position')
+  if (!metrics) return
+
+  // Згрупувати у порядку появи
+  const order: string[] = []
+  const byGroup = new Map<string, string[]>()
+  for (const m of metrics) {
+    const sg = m.stage_group as string
+    if (!byGroup.has(sg)) {
+      byGroup.set(sg, [])
+      order.push(sg)
+    }
+    byGroup.get(sg)!.push(m.id as string)
+  }
+
+  // Серед нетрафікових свапаємо
+  const nonTraffic = order.filter((g) => g !== 'traffic')
+  const idx = nonTraffic.indexOf(stageGroup)
+  if (idx === -1) return
+  const newIdx = direction === 'up' ? idx - 1 : idx + 1
+  if (newIdx < 0 || newIdx >= nonTraffic.length) return
+  ;[nonTraffic[idx], nonTraffic[newIdx]] = [nonTraffic[newIdx]!, nonTraffic[idx]!]
+
+  // Зберігаємо traffic окремо, далі — оновлений нетрафіковий порядок
+  const trafficIds = byGroup.get('traffic') ?? []
+  const finalOrder = [...(trafficIds.length ? ['traffic'] : []), ...nonTraffic]
+
+  let pos = 0
+  for (const sg of finalOrder) {
+    for (const id of byGroup.get(sg)!) {
+      await supabase.from('funnel_metrics').update({ position: pos }).eq('id', id)
+      pos++
+    }
+  }
+  revalidate(projectId)
+}
+
 // ============================================================
 // Метрики (для редагування існуючих)
 // ============================================================
