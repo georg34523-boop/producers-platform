@@ -344,8 +344,6 @@ function GroupSection({
                   initial="initial"
                   animate="animate"
                   exit="exit"
-                  layout
-                  className="overflow-hidden"
                 >
                   <TaskRow task={t} goals={goals} projectId={projectId} />
                 </motion.div>
@@ -440,17 +438,21 @@ function TaskRow({
         {task.comment ? '💬' : '+'}
       </Button>
 
-      <button
+      <Button
         type="button"
+        size="icon-xs"
+        variant="ghost"
+        title="Видалити"
+        aria-label="Видалити задачу"
         onClick={() => {
           if (confirm('Видалити задачу?')) {
             startTransition(() => deleteTask(task.id, projectId))
           }
         }}
-        className="text-muted-foreground hover:text-destructive"
+        className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
       >
         <Trash2 className="h-3.5 w-3.5" />
-      </button>
+      </Button>
 
       <Dialog open={commentOpen} onOpenChange={setCommentOpen}>
         <DialogContent className="sm:max-w-md">
