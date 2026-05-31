@@ -21,6 +21,7 @@ export type DashboardRow = {
   revenue_plan_avg: number
   revenue_plan_max: number
   revenue_actual: number
+  receivable_outstanding: number
   expected_pct: number
   flag: 'green' | 'yellow' | 'red' | 'success' | 'rocket'
   has_tracker: boolean
@@ -113,6 +114,47 @@ export async function listDashboard(): Promise<DashboardRow[]> {
     }
   }
 
+  // Кросмісячна актуальна дебіторка по кожному проєкту (один запит на всі)
+  const receivableByProject = new Map<string, number>()
+  if (list.length > 0) {
+    const projectIds = list.map((p) => p.id)
+    const { data: allTrackers } = await supabase
+      .from('monthly_trackers')
+      .select('id, project_id')
+      .in('project_id', projectIds)
+    type T = { id: string; project_id: string }
+    const trackersById = new Map<string, string>()
+    for (const t of (allTrackers ?? []) as T[]) trackersById.set(t.id, t.project_id)
+
+    const allTrackerIds = [...trackersById.keys()]
+    if (allTrackerIds.length > 0) {
+      const { data: allFunnels } = await supabase
+        .from('funnels')
+        .select('id, tracker_id')
+        .in('tracker_id', allTrackerIds)
+      type F = { id: string; tracker_id: string }
+      const funnelToProject = new Map<string, string>()
+      for (const f of (allFunnels ?? []) as F[]) {
+        const pid = trackersById.get(f.tracker_id)
+        if (pid) funnelToProject.set(f.id, pid)
+      }
+      const allFunnelIds = [...funnelToProject.keys()]
+      if (allFunnelIds.length > 0) {
+        const { data: sales } = await supabase
+          .from('funnel_product_sales')
+          .select('funnel_id, receivable_amount')
+          .in('funnel_id', allFunnelIds)
+        type S = { funnel_id: string; receivable_amount: number | string | null }
+        for (const s of (sales ?? []) as S[]) {
+          const pid = funnelToProject.get(s.funnel_id)
+          if (!pid) continue
+          const v = Number(s.receivable_amount ?? 0)
+          receivableByProject.set(pid, (receivableByProject.get(pid) ?? 0) + v)
+        }
+      }
+    }
+  }
+
   const today = new Date()
   const dayOfMonth = today.getUTCDate()
   const dim = daysInMonth(year, month)
@@ -131,6 +173,7 @@ export async function listDashboard(): Promise<DashboardRow[]> {
       revenue_plan_avg: plans.avg,
       revenue_plan_max: plans.max,
       revenue_actual: actual,
+      receivable_outstanding: receivableByProject.get(p.id) ?? 0,
       expected_pct: plans.avg > 0 ? Math.round((actual / plans.avg) * 100) : 0,
       flag: classifyFlag(actual, plans, dayOfMonth, dim),
       has_tracker: Boolean(t),

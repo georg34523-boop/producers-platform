@@ -172,7 +172,7 @@ export function findMetricByRole(metrics: FunnelMetric[], role: FunnelMetric['ro
   return metrics.find((m) => m.role === role) ?? null
 }
 
-/** Семантические агрегаты воронки (выручка/продажі/анкети/трафік). */
+/** Семантические агрегаты воронки (выручка/продажі/анкети/трафік + дебіторка). */
 export function funnelSemanticTotals(funnel: FunnelWithDetail, inRange?: (day: string) => boolean) {
   const filteredLog = inRange ? funnel.log.filter((r) => inRange(r.day_date)) : funnel.log
   const rev = findMetricByRole(funnel.metrics, 'revenue')
@@ -184,5 +184,117 @@ export function funnelSemanticTotals(funnel: FunnelWithDetail, inRange?: (day: s
     sales: sales ? sumMetric(filteredLog, sales.key) : 0,
     applications: apps ? sumMetric(filteredLog, apps.key) : 0,
     traffic_spend: traffic ? sumMetric(filteredLog, traffic.key) : 0,
+    receivable: sumMetric(filteredLog, 'payment__receivable'),
   }
+}
+
+export type ProjectAllTimeTotals = {
+  revenue: number
+  sales: number
+  applications: number
+  traffic_spend: number
+  months_count: number
+  first_month: { year: number; month: number } | null
+  last_month: { year: number; month: number } | null
+}
+
+/** Кросмісячна агрегація факту по проєкту: виручка/продажі/заявки/трафік за весь час. */
+export async function getProjectAllTimeTotals(projectId: string): Promise<ProjectAllTimeTotals> {
+  const supabase = await createClient()
+  const { data: trackers } = await supabase
+    .from('monthly_trackers')
+    .select('id, year, month')
+    .eq('project_id', projectId)
+    .order('year')
+    .order('month')
+  const list = (trackers ?? []) as { id: string; year: number; month: number }[]
+  if (list.length === 0) {
+    return {
+      revenue: 0,
+      sales: 0,
+      applications: 0,
+      traffic_spend: 0,
+      months_count: 0,
+      first_month: null,
+      last_month: null,
+    }
+  }
+
+  const trackerIds = list.map((t) => t.id)
+  const { data } = await supabase
+    .from('funnels')
+    .select(
+      `id, tracker_id,
+       mini_prices:funnel_mini_prices(*),
+       metrics:funnel_metrics(*),
+       log:funnel_daily_log(*),
+       funnel_products(product_id),
+       product_sales:funnel_product_sales(*)`,
+    )
+    .in('tracker_id', trackerIds)
+
+  type Raw = {
+    id: string
+    tracker_id: string
+    mini_prices: FunnelMiniPrice[]
+    metrics: FunnelMetric[]
+    log: FunnelDailyLog[]
+    funnel_products: { product_id: string }[]
+    product_sales: FunnelProductSale[]
+  }
+  const funnels = (data ?? []) as unknown as Raw[]
+
+  const agg = { revenue: 0, sales: 0, applications: 0, traffic_spend: 0 }
+  for (const f of funnels) {
+    const fakeFunnel = {
+      ...(f as unknown as Funnel),
+      mini_prices: f.mini_prices,
+      metrics: f.metrics,
+      log: f.log,
+      product_ids: f.funnel_products.map((fp) => fp.product_id),
+      product_sales: f.product_sales,
+      reactivations_out: [],
+      reactivations_in: [],
+    } as unknown as FunnelWithDetail
+    const t = funnelSemanticTotals(fakeFunnel)
+    agg.revenue += t.revenue
+    agg.sales += t.sales
+    agg.applications += t.applications
+    agg.traffic_spend += t.traffic_spend
+  }
+
+  return {
+    revenue: agg.revenue,
+    sales: agg.sales,
+    applications: agg.applications,
+    traffic_spend: agg.traffic_spend,
+    months_count: list.length,
+    first_month: { year: list[0]!.year, month: list[0]!.month },
+    last_month: { year: list[list.length - 1]!.year, month: list[list.length - 1]!.month },
+  }
+}
+
+/** Кросмісячна актуальна дебіторка по проєкту: SUM(receivable_amount) по всіх продажах. */
+export async function getProjectOutstandingReceivable(projectId: string): Promise<number> {
+  const supabase = await createClient()
+  // 1) всі трекери проєкту
+  const { data: trackers } = await supabase
+    .from('monthly_trackers')
+    .select('id')
+    .eq('project_id', projectId)
+  const trackerIds = (trackers ?? []).map((t) => t.id as string)
+  if (trackerIds.length === 0) return 0
+  // 2) всі воронки цих трекерів
+  const { data: funnels } = await supabase
+    .from('funnels')
+    .select('id')
+    .in('tracker_id', trackerIds)
+  const funnelIds = (funnels ?? []).map((f) => f.id as string)
+  if (funnelIds.length === 0) return 0
+  // 3) сума дебіторки по продажах
+  const { data: sales } = await supabase
+    .from('funnel_product_sales')
+    .select('receivable_amount')
+    .in('funnel_id', funnelIds)
+  return (sales ?? []).reduce((s, r) => s + Number(r.receivable_amount ?? 0), 0)
 }

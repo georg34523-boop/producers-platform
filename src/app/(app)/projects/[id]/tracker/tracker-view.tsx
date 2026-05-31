@@ -56,6 +56,7 @@ import {
   addMiniPrice,
   addStageFromTemplate,
   addTrafficField,
+  applyReceivablePayment,
   createFunnel,
   deleteFunnel,
   deleteLogRow,
@@ -205,17 +206,25 @@ export function TrackerView({
   funnels,
   weeklyPlans,
   products,
+  outstandingReceivable,
 }: {
   projectId: string
   tracker: MonthlyTracker
   funnels: FullFunnel[]
   weeklyPlans: TrackerWeeklyPlan[]
   products: Product[]
+  outstandingReceivable: number
 }) {
   return (
     <div className="space-y-6">
       <MonthSwitcher projectId={projectId} tracker={tracker} />
-      <BlockA projectId={projectId} tracker={tracker} weeklyPlans={weeklyPlans} funnels={funnels} />
+      <BlockA
+        projectId={projectId}
+        tracker={tracker}
+        weeklyPlans={weeklyPlans}
+        funnels={funnels}
+        outstandingReceivable={outstandingReceivable}
+      />
       <FunnelsSection projectId={projectId} tracker={tracker} funnels={funnels} products={products} />
       <ReflectionDialog projectId={projectId} tracker={tracker} />
     </div>
@@ -271,11 +280,13 @@ function BlockA({
   tracker,
   weeklyPlans,
   funnels,
+  outstandingReceivable,
 }: {
   projectId: string
   tracker: MonthlyTracker
   weeklyPlans: TrackerWeeklyPlan[]
   funnels: FullFunnel[]
+  outstandingReceivable: number
 }) {
   const weeks = weeksOfMonth(tracker.year, tracker.month)
   const planByWeek = new Map(weeklyPlans.map((p) => [p.week_index, Number(p.revenue_plan)]))
@@ -310,11 +321,12 @@ function BlockA({
         <CardTitle className="text-base">Позиція до плану</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-5">
           <Stat title="Ціль (середня)" value={fmt(Number(tracker.revenue_plan_avg))} />
           <Stat title="Факт місяця" value={fmt(totalFact)} highlight />
           <Stat title="% виконання" value={`${pct}%`} />
           <Stat title="Залишилось" value={fmt(remaining)} />
+          <Stat title="Дебіторка проєкту" value={fmt(outstandingReceivable)} />
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
@@ -990,12 +1002,15 @@ function ProductSalesSection({
   const [productId, setProductId] = useState<string>(products[0]?.id ?? '')
   const [count, setCount] = useState('')
   const [amount, setAmount] = useState('')
+  const [receivable, setReceivable] = useState('')
 
   const submit = () => {
     if (!productId) return
     const c = Number(count)
     const a = Number(amount)
-    if ((!Number.isFinite(c) || c <= 0) && (!Number.isFinite(a) || a <= 0)) return
+    const r = Number(receivable)
+    const hasAny = (Number.isFinite(c) && c > 0) || (Number.isFinite(a) && a > 0) || (Number.isFinite(r) && r > 0)
+    if (!hasAny) return
     startTransition(async () => {
       await upsertProductSale({
         funnel_id: funnel.id,
@@ -1004,9 +1019,11 @@ function ProductSalesSection({
         day_date: day,
         count: Number.isFinite(c) ? c : 0,
         amount: Number.isFinite(a) ? a : 0,
+        receivable_amount: Number.isFinite(r) ? r : 0,
       })
       setCount('')
       setAmount('')
+      setReceivable('')
     })
   }
 
@@ -1014,17 +1031,19 @@ function ProductSalesSection({
   const productName = new Map(products.map((p) => [p.id, p.name]))
   const totalCount = rows.reduce((s, r) => s + r.count, 0)
   const totalAmount = rows.reduce((s, r) => s + Number(r.amount), 0)
+  const totalReceivable = rows.reduce((s, r) => s + Number(r.receivable_amount), 0)
 
   return (
     <div className="rounded-md border bg-card/40 p-3">
       <div className="mb-2 flex items-center justify-between">
         <div className="text-sm font-medium">Продажі по продуктах</div>
-        <div className="text-xs text-muted-foreground">
+        <div className="text-xs text-muted-foreground tabular-nums">
           {fmt(totalCount)} шт · {fmt(totalAmount)} $
+          {totalReceivable > 0 ? <> · дебіторка {fmt(totalReceivable)} $</> : null}
         </div>
       </div>
 
-      <div className="grid grid-cols-[140px_1fr_80px_90px_auto] gap-2 rounded-md border bg-background p-2">
+      <div className="grid grid-cols-[120px_1fr_70px_90px_90px_auto] gap-2 rounded-md border bg-background p-2">
         <Input type="date" value={day} onChange={(e) => setDay(e.target.value)} className="h-8 text-xs" />
         <select
           value={productId}
@@ -1036,34 +1055,113 @@ function ProductSalesSection({
           ))}
         </select>
         <Input type="number" min={0} step={1} value={count} onChange={(e) => setCount(e.target.value)} placeholder="К-сть" className="h-8 text-xs" />
-        <Input type="number" min={0} step="any" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="$" className="h-8 text-xs" />
-        <Button size="sm" onClick={submit} disabled={!productId || (!count && !amount)}>+ Продаж</Button>
+        <Input type="number" min={0} step="any" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Зайшло $" className="h-8 text-xs" />
+        <Input type="number" min={0} step="any" value={receivable} onChange={(e) => setReceivable(e.target.value)} placeholder="Дебіт. $" className="h-8 text-xs" />
+        <Button size="sm" onClick={submit} disabled={!productId || (!count && !amount && !receivable)}>+ Продаж</Button>
       </div>
 
       {rows.length > 0 ? (
         <ul className="mt-2 divide-y rounded-md border bg-background">
           {rows.map((r) => (
-            <li key={r.id} className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs">
-              <span className="text-muted-foreground">
-                {new Date(r.day_date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}
-              </span>
-              <span className="flex-1 truncate">{productName.get(r.product_id) ?? '—'}</span>
-              <span>{fmt(r.count)} шт</span>
-              <span className="font-medium">{fmt(Number(r.amount))} $</span>
-              <button
-                type="button"
-                onClick={() => startTransition(() => deleteProductSale(r.id, projectId))}
-                className="text-muted-foreground hover:text-destructive"
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
-            </li>
+            <ProductSaleRow
+              key={r.id}
+              row={r}
+              productName={productName.get(r.product_id) ?? '—'}
+              projectId={projectId}
+            />
           ))}
         </ul>
       ) : (
         <p className="mt-2 text-xs text-muted-foreground">Ще немає продажів. Додай рядок вище — оберіть продукт.</p>
       )}
     </div>
+  )
+}
+
+function ProductSaleRow({
+  row,
+  productName,
+  projectId,
+}: {
+  row: FunnelProductSale
+  productName: string
+  projectId: string
+}) {
+  const [, startTransition] = useTransition()
+  const [payingOpen, setPayingOpen] = useState(false)
+  const [payAmt, setPayAmt] = useState('')
+  const receivable = Number(row.receivable_amount)
+
+  const submitDoplata = () => {
+    const v = Number(payAmt)
+    if (!Number.isFinite(v) || v <= 0) return
+    startTransition(async () => {
+      await applyReceivablePayment(row.id, projectId, Math.min(v, receivable))
+      setPayAmt('')
+      setPayingOpen(false)
+    })
+  }
+
+  return (
+    <li className="flex flex-wrap items-center gap-2 px-2 py-1.5 text-xs tabular-nums">
+      <span className="text-muted-foreground">
+        {new Date(row.day_date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}
+      </span>
+      <span className="flex-1 truncate">{productName}</span>
+      <span>{fmt(row.count)} шт</span>
+      <span className="font-medium">{fmt(Number(row.amount))} $</span>
+      <span className={cn(receivable > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground')}>
+        борг {fmt(receivable)} $
+      </span>
+      {receivable > 0 ? (
+        payingOpen ? (
+          <div className="flex items-center gap-1">
+            <Input
+              autoFocus
+              type="number"
+              min={0}
+              step="any"
+              max={receivable}
+              value={payAmt}
+              onChange={(e) => setPayAmt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submitDoplata()
+                if (e.key === 'Escape') {
+                  setPayingOpen(false)
+                  setPayAmt('')
+                }
+              }}
+              placeholder={`до ${fmt(receivable)}`}
+              className="h-6 w-20 text-[11px]"
+            />
+            <Button size="xs" variant="default" onClick={submitDoplata} disabled={!payAmt}>
+              ✓
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => {
+                setPayingOpen(false)
+                setPayAmt('')
+              }}
+            >
+              ×
+            </Button>
+          </div>
+        ) : (
+          <Button size="xs" variant="outline" onClick={() => setPayingOpen(true)}>
+            Доплата
+          </Button>
+        )
+      ) : null}
+      <button
+        type="button"
+        onClick={() => startTransition(() => deleteProductSale(row.id, projectId))}
+        className="text-muted-foreground hover:text-destructive"
+      >
+        <Trash2 className="h-3 w-3" />
+      </button>
+    </li>
   )
 }
 
@@ -1660,6 +1758,7 @@ function AddDayDialog({
   const [payProduct, setPayProduct] = useState<string>(products[0]?.id ?? '')
   const [payCount, setPayCount] = useState('')
   const [payAmount, setPayAmount] = useState('')
+  const [payReceivable, setPayReceivable] = useState('')
   const [reactTarget, setReactTarget] = useState<string>(otherFunnels[0]?.id ?? '')
   const [reactCount, setReactCount] = useState('')
 
@@ -1681,6 +1780,7 @@ function AddDayDialog({
     // скидаємо чернетку payment + реактивації при зміні дня
     setPayCount('')
     setPayAmount('')
+    setPayReceivable('')
     setReactCount('')
     if (!payProduct && products[0]) setPayProduct(products[0].id)
     if (!reactTarget && otherFunnels[0]) setReactTarget(otherFunnels[0].id)
@@ -1696,7 +1796,9 @@ function AddDayDialog({
     if (!payProduct) return
     const c = Number(payCount)
     const a = Number(payAmount)
-    if ((!Number.isFinite(c) || c <= 0) && (!Number.isFinite(a) || a <= 0)) return
+    const r = Number(payReceivable)
+    const hasAny = (Number.isFinite(c) && c > 0) || (Number.isFinite(a) && a > 0) || (Number.isFinite(r) && r > 0)
+    if (!hasAny) return
     await upsertProductSale({
       funnel_id: funnel.id,
       project_id: projectId,
@@ -1704,9 +1806,11 @@ function AddDayDialog({
       day_date: day,
       count: Number.isFinite(c) ? c : 0,
       amount: Number.isFinite(a) ? a : 0,
+      receivable_amount: Number.isFinite(r) ? r : 0,
     })
     setPayCount('')
     setPayAmount('')
+    setPayReceivable('')
   }
 
   const addReactivationRow = async () => {
@@ -1732,7 +1836,8 @@ function AddDayDialog({
     startTransition(async () => {
       await upsertDailyLog(funnel.id, projectId, day, vals, comment || null)
       // якщо у формі payment-чернетка заповнена — теж зберігаємо
-      if ((Number(payCount) > 0 || Number(payAmount) > 0) && payProduct) {
+      const hasPaymentDraft = Number(payCount) > 0 || Number(payAmount) > 0 || Number(payReceivable) > 0
+      if (hasPaymentDraft && payProduct) {
         await addPaymentRow()
       }
       // якщо чернетка реактивації заповнена — теж зберігаємо
@@ -1849,10 +1954,13 @@ function AddDayDialog({
                   {todaySales.length > 0 ? (
                     <ul className="divide-y rounded-md border bg-background text-xs">
                       {todaySales.map((s) => (
-                        <li key={s.id} className="flex items-center justify-between gap-2 px-2 py-1.5">
+                        <li key={s.id} className="flex items-center justify-between gap-2 px-2 py-1.5 tabular-nums">
                           <span className="flex-1 truncate">{productName.get(s.product_id) ?? '—'}</span>
                           <span>{fmt(s.count)} шт</span>
                           <span className="font-medium">{fmt(Number(s.amount))} $</span>
+                          <span className={cn(Number(s.receivable_amount) > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground')}>
+                            борг {fmt(Number(s.receivable_amount))} $
+                          </span>
                           <button
                             type="button"
                             onClick={() => startTransition(() => deleteProductSale(s.id, projectId))}
@@ -1864,14 +1972,7 @@ function AddDayDialog({
                       ))}
                     </ul>
                   ) : null}
-                  <div
-                    className={cn(
-                      'grid gap-2 rounded-md border bg-background p-2',
-                      products.length > 1
-                        ? 'grid-cols-[1fr_70px_90px_auto]'
-                        : 'grid-cols-[1fr_90px_auto]',
-                    )}
-                  >
+                  <div className="grid grid-cols-[1fr_60px_80px_80px_auto] gap-2 rounded-md border bg-background p-2">
                     {products.length > 1 ? (
                       <select
                         value={payProduct}
@@ -1883,7 +1984,7 @@ function AddDayDialog({
                         ))}
                       </select>
                     ) : (
-                      <div className="flex h-8 items-center px-2 text-xs text-muted-foreground">
+                      <div className="flex h-8 items-center truncate px-2 text-xs text-muted-foreground">
                         {products[0]?.name}
                       </div>
                     )}
@@ -1902,13 +2003,22 @@ function AddDayDialog({
                       step="any"
                       value={payAmount}
                       onChange={(e) => setPayAmount(e.target.value)}
-                      placeholder="$"
+                      placeholder="Зайшло $"
+                      className="h-8 text-xs"
+                    />
+                    <Input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={payReceivable}
+                      onChange={(e) => setPayReceivable(e.target.value)}
+                      placeholder="Дебіт. $"
                       className="h-8 text-xs"
                     />
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={!payProduct || (!payCount && !payAmount)}
+                      disabled={!payProduct || (!payCount && !payAmount && !payReceivable)}
                       onClick={() => startTransition(() => addPaymentRow())}
                     >
                       +

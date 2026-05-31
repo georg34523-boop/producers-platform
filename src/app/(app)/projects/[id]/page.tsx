@@ -11,11 +11,14 @@ import {
   getCustomDrivers,
   getFunnels,
   getOrCreateTracker,
+  getProjectAllTimeTotals,
+  getProjectOutstandingReceivable,
   nowYearMonth,
 } from '@/lib/queries/tracker'
 import { computeUnits, currentMonthRange } from '@/lib/units'
 import { cn } from '@/lib/utils'
 
+import { AllTimeStats } from './all-time-stats'
 import { CustomGoals } from './custom-goals'
 
 function fmt(n: number): string {
@@ -33,12 +36,14 @@ export default async function ProjectOverviewPage({
 
   const { year, month } = nowYearMonth()
   const tracker = await getOrCreateTracker(id, year, month)
-  const [funnels, products, expenses, returns, customDrivers] = await Promise.all([
+  const [funnels, products, expenses, returns, customDrivers, allTimeTotals, outstandingReceivable] = await Promise.all([
     getFunnels(tracker.id),
     listProducts(id),
     listExpenses(id),
     listReturns(id),
     getCustomDrivers(tracker.id),
+    getProjectAllTimeTotals(id),
+    getProjectOutstandingReceivable(id),
   ])
 
   const monthRange = currentMonthRange(year, month)
@@ -82,6 +87,7 @@ export default async function ProjectOverviewPage({
 
   return (
     <div className="space-y-6">
+      <AllTimeStats totals={allTimeTotals} outstandingReceivable={outstandingReceivable} />
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Цілі місяця</CardTitle>

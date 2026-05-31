@@ -654,13 +654,14 @@ async function syncPaymentDayFromProductSales(
   // Сума всіх продажів по продуктах за день
   const { data: rows } = await supabase
     .from('funnel_product_sales')
-    .select('count, amount')
+    .select('count, amount, receivable_amount')
     .eq('funnel_id', funnelId)
     .eq('day_date', day)
   const totalCount = (rows ?? []).reduce((s, r) => s + Number(r.count ?? 0), 0)
   const totalAmount = (rows ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0)
+  const totalReceivable = (rows ?? []).reduce((s, r) => s + Number(r.receivable_amount ?? 0), 0)
 
-  // Шукаємо payment-стейдж: keys payment__count / payment__amount
+  // Шукаємо payment-стейдж: keys payment__count / payment__amount / payment__receivable
   const { data: log } = await supabase
     .from('funnel_daily_log')
     .select('id, values, comment')
@@ -673,6 +674,8 @@ async function syncPaymentDayFromProductSales(
   else delete values['payment__count']
   if (totalAmount > 0) values['payment__amount'] = totalAmount
   else delete values['payment__amount']
+  if (totalReceivable > 0) values['payment__receivable'] = totalReceivable
+  else delete values['payment__receivable']
 
   const comment = log?.comment ?? null
   const allEmpty = Object.keys(values).length === 0 && !comment
@@ -699,12 +702,14 @@ export async function upsertProductSale(input: {
   day_date: string
   count: number
   amount: number
+  receivable_amount?: number
 }): Promise<void> {
   await requireProfile()
   const supabase = await createClient()
   const count = Math.max(0, Math.floor(Number(input.count) || 0))
   const amount = Math.max(0, Number(input.amount) || 0)
-  if (count === 0 && amount === 0) {
+  const receivable = Math.max(0, Number(input.receivable_amount ?? 0) || 0)
+  if (count === 0 && amount === 0 && receivable === 0) {
     await supabase
       .from('funnel_product_sales')
       .delete()
@@ -721,12 +726,48 @@ export async function upsertProductSale(input: {
           day_date: input.day_date,
           count,
           amount,
+          receivable_amount: receivable,
         },
         { onConflict: 'funnel_id,product_id,day_date' },
       )
   }
   await syncPaymentDayFromProductSales(supabase, input.funnel_id, input.day_date)
   revalidate(input.project_id)
+}
+
+/** Доплата клієнта: переказ суми з дебіторки в paid_amount по конкретному продажу. */
+export async function applyReceivablePayment(
+  saleId: string,
+  projectId: string,
+  amount: number,
+): Promise<void> {
+  await requireProfile()
+  const delta = Math.max(0, Number(amount) || 0)
+  if (delta <= 0) return
+  const supabase = await createClient()
+  const { data: row } = await supabase
+    .from('funnel_product_sales')
+    .select('funnel_id, day_date, amount, receivable_amount')
+    .eq('id', saleId)
+    .maybeSingle()
+  if (!row) return
+  const currentPaid = Number(row.amount ?? 0)
+  const currentReceivable = Number(row.receivable_amount ?? 0)
+  const applied = Math.min(delta, currentReceivable)
+  if (applied <= 0) return
+  await supabase
+    .from('funnel_product_sales')
+    .update({
+      amount: currentPaid + applied,
+      receivable_amount: currentReceivable - applied,
+    })
+    .eq('id', saleId)
+  await syncPaymentDayFromProductSales(
+    supabase,
+    row.funnel_id as string,
+    row.day_date as string,
+  )
+  revalidate(projectId)
 }
 
 export async function deleteProductSale(id: string, projectId: string): Promise<void> {

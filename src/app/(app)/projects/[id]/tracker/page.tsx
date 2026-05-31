@@ -2,6 +2,7 @@ import { listProducts } from '@/lib/queries/products'
 import {
   getFunnels,
   getOrCreateTracker,
+  getProjectOutstandingReceivable,
   getWeeklyPlans,
   nowYearMonth,
 } from '@/lib/queries/tracker'
@@ -30,10 +31,11 @@ export default async function TrackerPage({
   }
 
   const tracker = await getOrCreateTracker(id, year, month)
-  const [funnels, weeklyPlans, products] = await Promise.all([
+  const [funnels, weeklyPlans, products, outstandingReceivable] = await Promise.all([
     getFunnels(tracker.id),
     getWeeklyPlans(tracker.id),
     listProducts(id),
+    getProjectOutstandingReceivable(id),
   ])
 
   return (
@@ -43,6 +45,7 @@ export default async function TrackerPage({
       funnels={funnels}
       weeklyPlans={weeklyPlans}
       products={products.filter((p) => p.status === 'active')}
+      outstandingReceivable={outstandingReceivable}
     />
   )
 }

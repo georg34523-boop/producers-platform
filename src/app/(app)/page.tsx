@@ -115,8 +115,15 @@ function DashboardTable({ rows }: { rows: DashboardRow[] }) {
               <td className="px-3 py-2 text-right text-xs">{r.revenue_plan_min.toLocaleString('ru-RU')}</td>
               <td className="px-3 py-2 text-right">{r.revenue_plan_avg.toLocaleString('ru-RU')}</td>
               <td className="px-3 py-2 text-right text-xs">{r.revenue_plan_max.toLocaleString('ru-RU')}</td>
-              <td className="px-3 py-2 text-right font-medium">{r.revenue_actual.toLocaleString('ru-RU')}</td>
-              <td className="px-3 py-2 text-right">{r.has_tracker ? `${r.expected_pct}%` : '—'}</td>
+              <td className="px-3 py-2 text-right tabular-nums">
+                <div className="font-medium">{r.revenue_actual.toLocaleString('ru-RU')}</div>
+                {r.receivable_outstanding > 0 ? (
+                  <div className="text-[10px] text-amber-600 dark:text-amber-400">
+                    дебіт. {r.receivable_outstanding.toLocaleString('ru-RU')}
+                  </div>
+                ) : null}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">{r.has_tracker ? `${r.expected_pct}%` : '—'}</td>
               <td className="px-3 py-2 text-center">
                 {r.has_tracker ? (
                   <span title={FLAG_TITLE[r.flag]} className={cn('inline-block h-2.5 w-2.5 rounded-full', FLAG_DOT[r.flag])} />

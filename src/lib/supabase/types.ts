@@ -184,6 +184,7 @@ export interface FunnelProductSale {
   day_date: string
   count: number
   amount: number
+  receivable_amount: number
   created_at: string
 }
 
