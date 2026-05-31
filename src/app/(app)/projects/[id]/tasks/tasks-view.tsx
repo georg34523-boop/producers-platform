@@ -2,9 +2,8 @@
 
 import { useMemo, useState, useTransition } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
-import { AnimatePresence, motion } from 'motion/react'
-
-import { listItem } from '@/lib/motion'
+import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -336,19 +335,9 @@ function GroupSection({
           {tasks.length === 0 ? (
             <p className="px-3 py-3 text-xs text-muted-foreground">Поки порожньо.</p>
           ) : (
-            <AnimatePresence initial={false}>
-              {tasks.map((t) => (
-                <motion.div
-                  key={t.id}
-                  variants={listItem}
-                  initial="initial"
-                  animate="animate"
-                  exit="exit"
-                >
-                  <TaskRow task={t} goals={goals} projectId={projectId} />
-                </motion.div>
-              ))}
-            </AnimatePresence>
+            tasks.map((t) => (
+              <TaskRow key={t.id} task={t} goals={goals} projectId={projectId} />
+            ))
           )}
         </div>
       ) : null}
@@ -368,6 +357,21 @@ function TaskRow({
   const [, startTransition] = useTransition()
   const [commentOpen, setCommentOpen] = useState(false)
   const [comment, setComment] = useState(task.comment ?? '')
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const router = useRouter()
+
+  const doDelete = () => {
+    setConfirmOpen(false)
+    startTransition(async () => {
+      try {
+        await deleteTask(task.id, projectId)
+        router.refresh()
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Невідома помилка'
+        toast.error(`Не вдалося видалити: ${message}`)
+      }
+    })
+  }
 
   return (
     <div className="flex flex-wrap items-center gap-2 px-3 py-2">
@@ -444,15 +448,24 @@ function TaskRow({
         variant="ghost"
         title="Видалити"
         aria-label="Видалити задачу"
-        onClick={() => {
-          if (confirm('Видалити задачу?')) {
-            startTransition(() => deleteTask(task.id, projectId))
-          }
-        }}
+        onClick={() => setConfirmOpen(true)}
         className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
       >
         <Trash2 className="h-3.5 w-3.5" />
       </Button>
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Видалити задачу?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">«{task.title}» — дію не можна відмінити.</p>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConfirmOpen(false)}>Відміна</Button>
+            <Button variant="destructive" onClick={doDelete}>Видалити</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={commentOpen} onOpenChange={setCommentOpen}>
         <DialogContent className="sm:max-w-md">
