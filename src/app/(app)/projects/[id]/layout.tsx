@@ -4,9 +4,12 @@ import { ArrowLeft } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { requireProfile } from '@/lib/auth'
 import { PROJECT_STATUS_LABEL, WORK_MODEL_LABEL } from '@/lib/labels'
+import { listProfiles } from '@/lib/queries/profiles'
 import { getProject, listProjects } from '@/lib/queries/projects'
 
+import { ProjectAdmin } from './project-admin'
 import { ProjectSwitcher } from './project-switcher'
 import { ProjectTabs } from './project-tabs'
 
@@ -18,7 +21,13 @@ export default async function ProjectLayout({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
-  const [project, allProjects] = await Promise.all([getProject(id), listProjects()])
+  const me = await requireProfile()
+  const isAdmin = me.role === 'coo' || me.role === 'ceo'
+  const [project, allProjects, producers] = await Promise.all([
+    getProject(id),
+    listProjects(),
+    isAdmin ? listProfiles({ roles: ['producer', 'coo', 'ceo'] }) : Promise.resolve([]),
+  ])
   if (!project) notFound()
 
   return (
@@ -35,10 +44,20 @@ export default async function ProjectLayout({
             <ArrowLeft className="mr-1 h-4 w-4" />
             До проектів
           </Button>
-          <ProjectSwitcher
-            current={{ id: project.id, expert_name: project.expert_name }}
-            projects={allProjects}
-          />
+          <div className="flex items-center gap-2">
+            <ProjectSwitcher
+              current={{ id: project.id, expert_name: project.expert_name }}
+              projects={allProjects}
+            />
+            {isAdmin ? (
+              <ProjectAdmin
+                projectId={project.id}
+                projectName={project.expert_name}
+                currentProducerId={project.producer_id}
+                producers={producers}
+              />
+            ) : null}
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight">{project.expert_name}</h1>

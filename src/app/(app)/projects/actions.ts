@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation'
 import { z } from 'zod'
 
 import { requireProfile } from '@/lib/auth'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 
 const UuidOrEmpty = z.union([z.uuid(), z.literal('')]).transform((v) => (v === '' ? null : v))
@@ -129,4 +130,104 @@ export async function updateProject(formData: FormData): Promise<void> {
   revalidatePath(`/projects/${id}`)
   revalidatePath('/projects')
   revalidatePath('/')
+}
+
+// ============================================================
+// Видалення проєкту
+// ============================================================
+export async function deleteProject(projectId: string): Promise<void> {
+  const me = await requireProfile()
+  if (!isAdmin(me.role)) return
+  const supabase = await createClient()
+  await supabase.from('projects').delete().eq('id', projectId)
+  revalidatePath('/projects')
+  revalidatePath('/')
+  redirect('/projects')
+}
+
+// ============================================================
+// Зміна продюсера (з опційним створенням нового користувача)
+// ============================================================
+const ChangeProducerSchema = z.object({
+  project_id: z.uuid(),
+  producer_id: z.uuid(),
+})
+
+export async function changeProducer(input: {
+  project_id: string
+  producer_id: string
+}): Promise<{ error?: string } | undefined> {
+  const me = await requireProfile()
+  if (!isAdmin(me.role)) return { error: 'Тільки COO/CEO може міняти продюсера' }
+  const parsed = ChangeProducerSchema.safeParse(input)
+  if (!parsed.success) return { error: 'Невірний формат' }
+
+  const supabase = await createClient()
+  const { error } = await supabase
+    .from('projects')
+    .update({ producer_id: parsed.data.producer_id })
+    .eq('id', parsed.data.project_id)
+  if (error) return { error: error.message }
+
+  revalidatePath(`/projects/${parsed.data.project_id}`)
+  revalidatePath('/projects')
+  revalidatePath('/')
+}
+
+const InviteProducerSchema = z.object({
+  full_name: z.string().min(2).trim(),
+  email: z.email().trim().toLowerCase(),
+  password: z.string().min(8),
+})
+
+/** Створити нового продюсера + одразу призначити його на проєкт. */
+export async function inviteProducerAndAssign(input: {
+  project_id: string
+  full_name: string
+  email: string
+  password: string
+}): Promise<{ error?: string } | undefined> {
+  const me = await requireProfile()
+  if (!isAdmin(me.role)) return { error: 'Тільки COO/CEO' }
+  const parsed = InviteProducerSchema.safeParse({
+    full_name: input.full_name,
+    email: input.email,
+    password: input.password,
+  })
+  if (!parsed.success) return { error: 'Заповни всі поля (email, ім\'я, пароль ≥ 8)' }
+
+  let admin
+  try {
+    admin = createAdminClient()
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : 'Admin client unavailable' }
+  }
+
+  const { data: created, error: createErr } = await admin.auth.admin.createUser({
+    email: parsed.data.email,
+    password: parsed.data.password,
+    email_confirm: true,
+    user_metadata: { full_name: parsed.data.full_name },
+  })
+  if (createErr || !created.user) {
+    return { error: createErr?.message ?? 'Не вдалося створити користувача' }
+  }
+
+  const { error: profileErr } = await admin
+    .from('profiles')
+    .update({ role: 'producer', full_name: parsed.data.full_name })
+    .eq('id', created.user.id)
+  if (profileErr) return { error: profileErr.message }
+
+  const supabase = await createClient()
+  const { error: assignErr } = await supabase
+    .from('projects')
+    .update({ producer_id: created.user.id })
+    .eq('id', input.project_id)
+  if (assignErr) return { error: assignErr.message }
+
+  revalidatePath(`/projects/${input.project_id}`)
+  revalidatePath('/projects')
+  revalidatePath('/')
+  revalidatePath('/team')
 }
