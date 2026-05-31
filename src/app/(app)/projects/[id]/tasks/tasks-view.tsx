@@ -6,7 +6,6 @@ import { AnimatePresence, motion } from 'motion/react'
 
 import { listItem } from '@/lib/motion'
 
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -43,39 +42,47 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 
 const STATUS_ORDER: TaskStatus[] = ['todo', 'doing', 'done']
 
-const NEXT_STATUS: Record<TaskStatus, TaskStatus> = {
-  todo: 'doing',
-  doing: 'done',
-  done: 'todo',
-}
-
 const STATUS_CLASS: Record<TaskStatus, string> = {
   todo: 'bg-muted text-muted-foreground border-muted-foreground/20 hover:bg-muted/80',
   doing: 'bg-blue-100 text-blue-700 border-blue-300 hover:bg-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800',
   done: 'bg-green-100 text-green-700 border-green-300 hover:bg-green-200 dark:bg-green-950/40 dark:text-green-300 dark:border-green-800',
 }
 
-function StatusPill({
+function StatusSelect({
   status,
-  onCycle,
+  onChange,
 }: {
   status: TaskStatus
-  onCycle?: () => void
+  onChange: (next: TaskStatus) => void
 }) {
   return (
-    <button
-      type="button"
-      onClick={onCycle}
-      disabled={!onCycle}
+    <div
       className={cn(
-        'inline-flex h-7 shrink-0 items-center rounded-full border px-2.5 text-[11px] font-medium transition-colors',
+        'relative inline-flex h-7 shrink-0 items-center rounded-full border pl-2.5 pr-6 text-[11px] font-medium transition-colors',
         STATUS_CLASS[status],
-        !onCycle && 'cursor-default',
       )}
-      title={onCycle ? 'Клік — наступний статус' : undefined}
     >
-      {STATUS_LABEL[status]}
-    </button>
+      <span className="pointer-events-none">{STATUS_LABEL[status]}</span>
+      <svg
+        className="pointer-events-none absolute right-1.5 h-3 w-3 opacity-70"
+        viewBox="0 0 12 12"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      >
+        <path d="M3 5l3 3 3-3" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <select
+        value={status}
+        onChange={(e) => onChange(e.target.value as TaskStatus)}
+        className="absolute inset-0 cursor-pointer appearance-none bg-transparent opacity-0"
+        aria-label="Статус"
+      >
+        {STATUS_ORDER.map((s) => (
+          <option key={s} value={s}>{STATUS_LABEL[s]}</option>
+        ))}
+      </select>
+    </div>
   )
 }
 
@@ -340,7 +347,7 @@ function GroupSection({
                   layout
                   className="overflow-hidden"
                 >
-                  <TaskRow task={t} groups={groups} goals={goals} projectId={projectId} />
+                  <TaskRow task={t} goals={goals} projectId={projectId} />
                 </motion.div>
               ))}
             </AnimatePresence>
@@ -353,31 +360,19 @@ function GroupSection({
 
 function TaskRow({
   task,
-  groups,
   goals,
   projectId,
 }: {
   task: ProjectTask
-  groups: ProjectTaskGroup[]
   goals: TrackerCustomDriver[]
   projectId: string
 }) {
   const [, startTransition] = useTransition()
   const [commentOpen, setCommentOpen] = useState(false)
   const [comment, setComment] = useState(task.comment ?? '')
-  const linkedGoal = goals.find((g) => g.id === task.linked_goal_id)
 
   return (
     <div className="flex flex-wrap items-center gap-2 px-3 py-2">
-      <StatusPill
-        status={task.status}
-        onCycle={() =>
-          startTransition(() =>
-            updateTask(task.id, projectId, { status: NEXT_STATUS[task.status] }),
-          )
-        }
-      />
-
       <Input
         defaultValue={task.title}
         onBlur={(e) => {
@@ -392,54 +387,47 @@ function TaskRow({
         )}
       />
 
-      <select
-        value={task.group_id ?? ''}
-        onChange={(e) =>
-          startTransition(() =>
-            updateTask(task.id, projectId, { group_id: e.target.value || null }),
-          )
+      <StatusSelect
+        status={task.status}
+        onChange={(next) =>
+          startTransition(() => updateTask(task.id, projectId, { status: next }))
         }
-        className="h-7 max-w-[140px] rounded-md border border-input bg-background px-1 text-xs"
-        title="Група"
-      >
-        <option value="">Без групи</option>
-        {groups.map((g) => (
-          <option key={g.id} value={g.id}>{g.name}</option>
-        ))}
-      </select>
-
-      <Input
-        type="date"
-        defaultValue={task.deadline ?? ''}
-        onBlur={(e) => {
-          const v = e.target.value || null
-          if (v !== task.deadline) {
-            startTransition(() => updateTask(task.id, projectId, { deadline: v }))
-          }
-        }}
-        className="h-7 w-36 text-xs"
       />
 
-      {goals.length > 0 ? (
-        <select
-          value={task.linked_goal_id ?? ''}
-          onChange={(e) =>
-            startTransition(() =>
-              updateTask(task.id, projectId, { linked_goal_id: e.target.value || null }),
-            )
-          }
-          className="h-7 max-w-[160px] rounded-md border border-input bg-background px-1 text-xs"
-          title="Привʼязати до Доп цілі"
-        >
-          <option value="">Без цілі</option>
-          {goals.map((g) => (
-            <option key={g.id} value={g.id}>{g.name}</option>
-          ))}
-        </select>
-      ) : null}
+      <div className="flex items-center gap-1.5">
+        <span className="text-[11px] text-muted-foreground">Дедлайн</span>
+        <Input
+          type="date"
+          defaultValue={task.deadline ?? ''}
+          onBlur={(e) => {
+            const v = e.target.value || null
+            if (v !== task.deadline) {
+              startTransition(() => updateTask(task.id, projectId, { deadline: v }))
+            }
+          }}
+          className="h-7 w-36 text-xs"
+        />
+      </div>
 
-      {linkedGoal ? (
-        <Badge variant="secondary" className="text-[10px]">{linkedGoal.name}</Badge>
+      {goals.length > 0 ? (
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] text-muted-foreground">Ціль</span>
+          <select
+            value={task.linked_goal_id ?? ''}
+            onChange={(e) =>
+              startTransition(() =>
+                updateTask(task.id, projectId, { linked_goal_id: e.target.value || null }),
+              )
+            }
+            className="h-7 max-w-[160px] rounded-md border border-input bg-background px-1.5 text-xs"
+            aria-label="Привʼязати до Доп цілі"
+          >
+            <option value="">— без цілі —</option>
+            {goals.map((g) => (
+              <option key={g.id} value={g.id}>{g.name}</option>
+            ))}
+          </select>
+        </div>
       ) : null}
 
       <Button
