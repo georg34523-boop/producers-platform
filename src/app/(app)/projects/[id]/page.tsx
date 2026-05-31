@@ -1,6 +1,8 @@
 import { notFound } from 'next/navigation'
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { CountUp } from '@/components/ui/count-up'
+import { ProgressBar } from '@/components/ui/progress-bar'
 import { getProject } from '@/lib/queries/projects'
 import { listProducts } from '@/lib/queries/products'
 import { listExpenses, listReturns } from '@/lib/queries/expenses'
@@ -130,17 +132,11 @@ export default async function ProjectOverviewPage({
 
 function PlanBox({ label, value, highlight }: { label: string; value: number; highlight?: boolean }) {
   return (
-    <div className={cn('rounded-md border p-3', highlight && 'border-foreground/30 bg-muted/30')}>
+    <div className={cn('rounded-md border p-3', highlight && 'border-primary/30 bg-primary/5')}>
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 text-lg font-semibold">{fmt(value)}</div>
-    </div>
-  )
-}
-
-function ProgressBar({ pct }: { pct: number }) {
-  return (
-    <div className="h-2 overflow-hidden rounded bg-muted">
-      <div className={cn('h-full', pct >= 100 ? 'bg-emerald-500' : 'bg-foreground/70')} style={{ width: `${pct}%` }} />
+      <div className="mt-1 text-lg font-semibold tabular-nums">
+        <CountUp value={value} />
+      </div>
     </div>
   )
 }
@@ -150,14 +146,16 @@ function DriverBox({ label, plan, actual }: { label: string; plan: number; actua
   return (
     <div className="rounded-md border bg-card/40 p-3">
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 text-sm">
-        <span className="font-semibold">{fmt(actual)}</span>
+      <div className="mt-1 text-sm tabular-nums">
+        <span className="font-semibold">
+          <CountUp value={actual} />
+        </span>
         <span className="text-muted-foreground"> / {fmt(plan)}</span>
       </div>
-      <div className="mt-1.5 h-1 overflow-hidden rounded bg-muted">
-        <div className={cn('h-full', pct >= 100 ? 'bg-emerald-500' : 'bg-foreground/70')} style={{ width: `${Math.min(100, pct)}%` }} />
+      <div className="mt-1.5">
+        <ProgressBar pct={pct} size="sm" />
       </div>
-      <div className="mt-0.5 text-[11px] text-muted-foreground">{pct}%</div>
+      <div className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">{pct}%</div>
     </div>
   )
 }
@@ -166,7 +164,9 @@ function BigNum({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-md border bg-card/40 p-4">
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 text-2xl font-semibold tracking-tight">{fmt(value)}</div>
+      <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">
+        <CountUp value={value} />
+      </div>
     </div>
   )
 }

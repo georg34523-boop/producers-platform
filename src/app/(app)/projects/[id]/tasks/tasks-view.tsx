@@ -2,6 +2,9 @@
 
 import { useMemo, useState, useTransition } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
+
+import { listItem } from '@/lib/motion'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -326,9 +329,21 @@ function GroupSection({
           {tasks.length === 0 ? (
             <p className="px-3 py-3 text-xs text-muted-foreground">Поки порожньо.</p>
           ) : (
-            tasks.map((t) => (
-              <TaskRow key={t.id} task={t} groups={groups} goals={goals} projectId={projectId} />
-            ))
+            <AnimatePresence initial={false}>
+              {tasks.map((t) => (
+                <motion.div
+                  key={t.id}
+                  variants={listItem}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
+                  layout
+                  className="overflow-hidden"
+                >
+                  <TaskRow task={t} groups={groups} goals={goals} projectId={projectId} />
+                </motion.div>
+              ))}
+            </AnimatePresence>
           )}
         </div>
       ) : null}

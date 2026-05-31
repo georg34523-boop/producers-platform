@@ -2,9 +2,11 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Folders, LayoutDashboard, Users } from 'lucide-react'
+import { Folders, LayoutDashboard, PanelLeftClose, PanelLeftOpen, Users } from 'lucide-react'
+import { motion } from 'motion/react'
 
 import { cn } from '@/lib/utils'
+import { useSidebarState } from '@/lib/use-sidebar-state'
 import type { UserRole } from '@/lib/supabase/types'
 
 type NavItem = {
@@ -20,16 +22,38 @@ const NAV: NavItem[] = [
   { href: '/team', label: 'Команда', icon: Users, roles: ['coo', 'ceo'] },
 ]
 
+const W_OPEN = 224
+const W_CLOSED = 60
+
 export function Sidebar({ role }: { role: UserRole }) {
   const pathname = usePathname()
   const items = NAV.filter((i) => i.roles.includes(role))
+  const { collapsed, toggle, mounted } = useSidebarState()
+  const width = mounted && collapsed ? W_CLOSED : W_OPEN
 
   return (
-    <aside className="hidden w-60 shrink-0 border-r bg-sidebar text-sidebar-foreground md:block">
-      <div className="flex h-14 items-center border-b px-5">
-        <span className="text-sm font-semibold tracking-tight">Producers Platform</span>
+    <motion.aside
+      animate={{ width }}
+      initial={false}
+      transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+      className="hidden shrink-0 border-r bg-sidebar text-sidebar-foreground md:flex md:flex-col"
+      style={{ width: mounted ? undefined : W_OPEN }}
+    >
+      <div className="flex h-12 items-center border-b px-3">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+          <span className="text-[11px] font-semibold tracking-tight">PP</span>
+        </div>
+        <span
+          className={cn(
+            'ml-2 truncate text-sm font-medium tracking-tight transition-opacity duration-150',
+            collapsed && 'pointer-events-none opacity-0',
+          )}
+        >
+          Producers Platform
+        </span>
       </div>
-      <nav className="p-3">
+
+      <nav className="flex-1 p-2">
         <ul className="space-y-0.5">
           {items.map((item) => {
             const active = pathname === item.href || (item.href !== '/' && pathname?.startsWith(item.href))
@@ -38,21 +62,61 @@ export function Sidebar({ role }: { role: UserRole }) {
               <li key={item.href}>
                 <Link
                   href={item.href}
+                  title={collapsed ? item.label : undefined}
                   className={cn(
-                    'flex items-center gap-2 rounded-md px-2.5 py-2 text-sm transition-colors',
+                    'relative flex h-9 items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors',
                     active
                       ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                      : 'text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground',
+                      : 'text-sidebar-foreground/75 hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground',
                   )}
                 >
-                  <Icon className="h-4 w-4" />
-                  {item.label}
+                  {active ? (
+                    <motion.span
+                      layoutId="sidebar-active"
+                      className="absolute -left-2 top-1/2 h-5 w-[2px] -translate-y-1/2 rounded-r-full bg-primary"
+                      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                    />
+                  ) : null}
+                  <Icon className="h-[1.05rem] w-[1.05rem] shrink-0" />
+                  <span
+                    className={cn(
+                      'truncate transition-opacity duration-150',
+                      collapsed && 'pointer-events-none opacity-0',
+                    )}
+                  >
+                    {item.label}
+                  </span>
                 </Link>
               </li>
             )
           })}
         </ul>
       </nav>
-    </aside>
+
+      <div className="border-t p-2">
+        <button
+          type="button"
+          onClick={toggle}
+          aria-label={collapsed ? 'Розгорнути сайдбар' : 'Згорнути сайдбар'}
+          className={cn(
+            'flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-sm text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground',
+          )}
+        >
+          {collapsed ? (
+            <PanelLeftOpen className="h-[1.05rem] w-[1.05rem]" />
+          ) : (
+            <PanelLeftClose className="h-[1.05rem] w-[1.05rem]" />
+          )}
+          <span
+            className={cn(
+              'truncate transition-opacity duration-150',
+              collapsed && 'pointer-events-none opacity-0',
+            )}
+          >
+            Згорнути
+          </span>
+        </button>
+      </div>
+    </motion.aside>
   )
 }

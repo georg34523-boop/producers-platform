@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { motion } from 'motion/react'
 
 import { cn } from '@/lib/utils'
 
@@ -27,13 +28,18 @@ export function ProjectTabs({ projectId }: { projectId: string }) {
               key={t.suffix}
               href={href}
               className={cn(
-                'border-b-2 px-3 py-2 text-sm transition-colors',
-                active
-                  ? 'border-foreground text-foreground'
-                  : 'border-transparent text-muted-foreground hover:text-foreground',
+                'relative px-3 py-2 text-sm transition-colors',
+                active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
               )}
             >
               {t.label}
+              {active ? (
+                <motion.span
+                  layoutId="project-tab-underline"
+                  className="absolute inset-x-2 -bottom-px h-[2px] rounded-full bg-primary"
+                  transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                />
+              ) : null}
             </Link>
           )
         })}

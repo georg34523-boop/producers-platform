@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { ProgressBar } from '@/components/ui/progress-bar'
 import type { TrackerCustomDriver } from '@/lib/supabase/types'
 import { cn } from '@/lib/utils'
 
@@ -146,13 +147,10 @@ function GoalCard({ goal, projectId }: { goal: TrackerCustomDriver; projectId: s
             {goal.unit ? <span className="ml-1 text-xs text-muted-foreground">{goal.unit}</span> : null}
           </div>
 
-          <div className="mt-2 h-1.5 overflow-hidden rounded bg-muted">
-            <div
-              className={cn('h-full transition-all', done ? 'bg-emerald-500' : 'bg-foreground/70')}
-              style={{ width: `${pct}%` }}
-            />
+          <div className="mt-2">
+            <ProgressBar pct={pct} size="sm" />
           </div>
-          <div className="mt-0.5 text-[10px] text-muted-foreground">{pct}%</div>
+          <div className="mt-0.5 text-[10px] text-muted-foreground tabular-nums">{pct}%</div>
 
           <div className="mt-2 flex gap-1">
             {[1, 2, 5].map((step) => (

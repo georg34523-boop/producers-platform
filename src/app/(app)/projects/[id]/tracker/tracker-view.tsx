@@ -3,6 +3,11 @@
 import { useMemo, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Plus, Trash2 } from 'lucide-react'
+import { motion } from 'motion/react'
+
+import { CountUp } from '@/components/ui/count-up'
+import { ProgressBar } from '@/components/ui/progress-bar'
+import { drawLine, easeOut } from '@/lib/motion'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -355,9 +360,18 @@ function CashFlowWeeks({
     const fact = factByWeek.get(w.idx) ?? 0
     const plan = planByWeek.get(w.idx) ?? 0
     const wpct = plan > 0 ? Math.round((fact / plan) * 100) : 0
-    const status = plan === 0 ? '—' : wpct >= 85 ? '🟢 в плані' : wpct >= 70 ? '🟡 нижче плану' : '🔴 критично'
+    const dotClass =
+      plan === 0
+        ? 'bg-muted-foreground/40'
+        : wpct >= 85
+        ? 'bg-emerald-500'
+        : wpct >= 70
+        ? 'bg-amber-500'
+        : 'bg-rose-500'
+    const statusLabel =
+      plan === 0 ? '—' : wpct >= 85 ? 'в плані' : wpct >= 70 ? 'нижче плану' : 'критично'
     return (
-      <tr key={w.idx} className={cn('hover:bg-muted/20', highlight && 'bg-muted/30')}>
+      <tr key={w.idx} className={cn('hover:bg-muted/20 tabular-nums', highlight && 'bg-primary/[0.04]')}>
         <td className="px-3 py-2">
           Тиждень {w.idx} ({w.start}–{w.end})
           {highlight ? <Badge variant="secondary" className="ml-2 text-[10px]">актуальна</Badge> : null}
@@ -365,9 +379,23 @@ function CashFlowWeeks({
         <td className="px-3 py-2 text-right">
           <WeeklyPlanInput trackerId={trackerId} projectId={projectId} weekIndex={w.idx} defaultValue={plan} />
         </td>
-        <td className="px-3 py-2 text-right font-medium">{fmt(fact)}</td>
-        <td className="px-3 py-2 text-right">{plan > 0 ? `${wpct}%` : '—'}</td>
-        <td className="px-3 py-2 text-center text-xs">{status}</td>
+        <td className="px-3 py-2 text-right font-medium">
+          <CountUp value={fact} />
+        </td>
+        <td className="px-3 py-2">
+          <div className="ml-auto w-24">
+            <ProgressBar pct={wpct} size="sm" />
+          </div>
+          <div className="mt-0.5 text-right text-[11px] text-muted-foreground">
+            {plan > 0 ? `${wpct}%` : '—'}
+          </div>
+        </td>
+        <td className="px-3 py-2 text-center text-xs">
+          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+            <span className={cn('h-1.5 w-1.5 rounded-full', dotClass)} />
+            {statusLabel}
+          </span>
+        </td>
       </tr>
     )
   }
@@ -2163,10 +2191,32 @@ function MetricMiniChart({
       {series.length === 0 ? (
         <div className="flex h-[50px] items-center justify-center text-[10px] text-muted-foreground">немає даних</div>
       ) : (
-        <svg viewBox={`0 0 ${W} ${H}`} className="mt-1 w-full">
-          <path d={path} fill="none" stroke="currentColor" strokeWidth={1.5} className="text-foreground/70" />
+        <svg viewBox={`0 0 ${W} ${H}`} className="mt-1 w-full overflow-visible">
+          <motion.path
+            d={path}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="text-primary"
+            initial="initial"
+            whileInView="animate"
+            viewport={{ once: true, margin: '-10% 0px' }}
+            variants={drawLine}
+          />
           {points.map((p, i) => (
-            <circle key={i} cx={p.x} cy={p.y} r={1.5} className="fill-foreground" />
+            <motion.circle
+              key={i}
+              cx={p.x}
+              cy={p.y}
+              r={1.8}
+              className="fill-primary"
+              initial={{ opacity: 0, scale: 0 }}
+              whileInView={{ opacity: 1, scale: 1 }}
+              viewport={{ once: true, margin: '-10% 0px' }}
+              transition={{ duration: 0.18, ease: easeOut, delay: 0.4 + i * 0.02 }}
+            />
           ))}
         </svg>
       )}
