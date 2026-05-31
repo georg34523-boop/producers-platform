@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState, useTransition } from 'react'
-import { Circle, CircleDashed, CircleCheck, Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -38,16 +38,42 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   done: 'Зроблено',
 }
 
+const STATUS_ORDER: TaskStatus[] = ['todo', 'doing', 'done']
+
 const NEXT_STATUS: Record<TaskStatus, TaskStatus> = {
   todo: 'doing',
   doing: 'done',
   done: 'todo',
 }
 
-function StatusIcon({ status, className }: { status: TaskStatus; className?: string }) {
-  if (status === 'done') return <CircleCheck className={cn('text-green-600', className)} />
-  if (status === 'doing') return <Circle className={cn('text-blue-600', className)} />
-  return <CircleDashed className={cn('text-muted-foreground', className)} />
+const STATUS_CLASS: Record<TaskStatus, string> = {
+  todo: 'bg-muted text-muted-foreground border-muted-foreground/20 hover:bg-muted/80',
+  doing: 'bg-blue-100 text-blue-700 border-blue-300 hover:bg-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800',
+  done: 'bg-green-100 text-green-700 border-green-300 hover:bg-green-200 dark:bg-green-950/40 dark:text-green-300 dark:border-green-800',
+}
+
+function StatusPill({
+  status,
+  onCycle,
+}: {
+  status: TaskStatus
+  onCycle?: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onCycle}
+      disabled={!onCycle}
+      className={cn(
+        'inline-flex h-7 shrink-0 items-center rounded-full border px-2.5 text-[11px] font-medium transition-colors',
+        STATUS_CLASS[status],
+        !onCycle && 'cursor-default',
+      )}
+      title={onCycle ? 'Клік — наступний статус' : undefined}
+    >
+      {STATUS_LABEL[status]}
+    </button>
+  )
 }
 
 export function TasksView({
@@ -65,15 +91,27 @@ export function TasksView({
   const [newTaskOpen, setNewTaskOpen] = useState(false)
   const [newGroup, setNewGroup] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [statusFilter, setStatusFilter] = useState<TaskStatus | 'all'>('all')
+
+  const filteredTasks = useMemo(
+    () => (statusFilter === 'all' ? tasks : tasks.filter((t) => t.status === statusFilter)),
+    [tasks, statusFilter],
+  )
 
   const tasksByGroup = useMemo(() => {
     const m = new Map<string | 'none', ProjectTask[]>()
-    for (const t of tasks) {
+    for (const t of filteredTasks) {
       const k = t.group_id ?? 'none'
       if (!m.has(k)) m.set(k, [])
       m.get(k)!.push(t)
     }
     return m
+  }, [filteredTasks])
+
+  const statusCounts = useMemo(() => {
+    const c = { todo: 0, doing: 0, done: 0 } as Record<TaskStatus, number>
+    for (const t of tasks) c[t.status]++
+    return c
   }, [tasks])
 
   const ungrouped = tasksByGroup.get('none') ?? []
@@ -111,6 +149,36 @@ export function TasksView({
             Нова задача
           </Button>
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1">
+        <button
+          type="button"
+          onClick={() => setStatusFilter('all')}
+          className={cn(
+            'rounded-full border px-3 py-1 text-xs transition-colors',
+            statusFilter === 'all'
+              ? 'border-foreground bg-muted'
+              : 'text-muted-foreground hover:bg-muted/30',
+          )}
+        >
+          Усі <span className="ml-1 text-[10px] text-muted-foreground">{tasks.length}</span>
+        </button>
+        {STATUS_ORDER.map((s) => (
+          <button
+            key={s}
+            type="button"
+            onClick={() => setStatusFilter(s)}
+            className={cn(
+              'rounded-full border px-3 py-1 text-xs transition-colors',
+              statusFilter === s
+                ? STATUS_CLASS[s].split(' ').filter((c) => !c.startsWith('hover:')).join(' ')
+                : 'text-muted-foreground hover:bg-muted/30',
+            )}
+          >
+            {STATUS_LABEL[s]} <span className="ml-1 text-[10px] opacity-70">{statusCounts[s]}</span>
+          </button>
+        ))}
       </div>
 
       <div className="space-y-3">
@@ -286,18 +354,14 @@ function TaskRow({
 
   return (
     <div className="flex flex-wrap items-center gap-2 px-3 py-2">
-      <button
-        type="button"
-        onClick={() =>
+      <StatusPill
+        status={task.status}
+        onCycle={() =>
           startTransition(() =>
             updateTask(task.id, projectId, { status: NEXT_STATUS[task.status] }),
           )
         }
-        title={STATUS_LABEL[task.status]}
-        className="shrink-0"
-      >
-        <StatusIcon status={task.status} className="h-5 w-5" />
-      </button>
+      />
 
       <Input
         defaultValue={task.title}
