@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { requireProfile } from '@/lib/auth'
+import { CURRENCY_SYMBOL } from '@/lib/currency'
 import { PROJECT_STATUS_LABEL, ROLE_LABEL, WORK_MODEL_LABEL } from '@/lib/labels'
 import { listDashboard, type DashboardRow } from '@/lib/queries/dashboard'
 import { cn } from '@/lib/utils'
@@ -116,10 +117,12 @@ function DashboardTable({ rows }: { rows: DashboardRow[] }) {
               <td className="px-3 py-2 text-right">{r.revenue_plan_avg.toLocaleString('ru-RU')}</td>
               <td className="px-3 py-2 text-right text-xs">{r.revenue_plan_max.toLocaleString('ru-RU')}</td>
               <td className="px-3 py-2 text-right tabular-nums">
-                <div className="font-medium">{r.revenue_actual.toLocaleString('ru-RU')}</div>
+                <div className="font-medium">
+                  {r.revenue_actual.toLocaleString('ru-RU')} {CURRENCY_SYMBOL[r.currency]}
+                </div>
                 {r.receivable_outstanding > 0 ? (
                   <div className="text-[10px] text-amber-600 dark:text-amber-400">
-                    дебіт. {r.receivable_outstanding.toLocaleString('ru-RU')}
+                    дебіт. {r.receivable_outstanding.toLocaleString('ru-RU')} {CURRENCY_SYMBOL[r.currency]}
                   </div>
                 ) : null}
               </td>

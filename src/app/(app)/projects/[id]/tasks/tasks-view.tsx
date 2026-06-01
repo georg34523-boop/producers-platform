@@ -1,7 +1,7 @@
 'use client'
 
-import { useMemo, useState, useTransition } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useState, useTransition } from 'react'
+import { CalendarClock, History, Plus, Trash2 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 
@@ -19,6 +19,7 @@ import { Textarea } from '@/components/ui/textarea'
 import type {
   ProjectTask,
   ProjectTaskGroup,
+  TaskDeadlineChange,
   TaskStatus,
   TrackerCustomDriver,
 } from '@/lib/supabase/types'
@@ -29,8 +30,10 @@ import {
   addTaskGroup,
   deleteTask,
   deleteTaskGroup,
+  fetchDeadlineHistory,
   renameTaskGroup,
   updateTask,
+  updateTaskDeadline,
 } from './actions'
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
@@ -90,11 +93,13 @@ export function TasksView({
   groups,
   tasks,
   goals,
+  deadlineChangeCounts,
 }: {
   projectId: string
   groups: ProjectTaskGroup[]
   tasks: ProjectTask[]
   goals: TrackerCustomDriver[]
+  deadlineChangeCounts: Record<string, number>
 }) {
   const [, startTransition] = useTransition()
   const [newTaskOpen, setNewTaskOpen] = useState(false)
@@ -202,6 +207,7 @@ export function TasksView({
               groups={groups}
               goals={goals}
               projectId={projectId}
+              deadlineChangeCounts={deadlineChangeCounts}
               collapsed={isCollapsed}
               onToggle={() =>
                 setCollapsed((prev) => {
@@ -223,6 +229,7 @@ export function TasksView({
             groups={groups}
             goals={goals}
             projectId={projectId}
+            deadlineChangeCounts={deadlineChangeCounts}
             collapsed={collapsed.has('none')}
             onToggle={() =>
               setCollapsed((prev) => {
@@ -255,6 +262,7 @@ function GroupSection({
   projectId,
   collapsed,
   onToggle,
+  deadlineChangeCounts,
 }: {
   group: ProjectTaskGroup | null
   tasks: ProjectTask[]
@@ -263,6 +271,7 @@ function GroupSection({
   projectId: string
   collapsed: boolean
   onToggle: () => void
+  deadlineChangeCounts: Record<string, number>
 }) {
   const [, startTransition] = useTransition()
   const [editing, setEditing] = useState(false)
@@ -336,7 +345,13 @@ function GroupSection({
             <p className="px-3 py-3 text-xs text-muted-foreground">Поки порожньо.</p>
           ) : (
             tasks.map((t) => (
-              <TaskRow key={t.id} task={t} goals={goals} projectId={projectId} />
+              <TaskRow
+                key={t.id}
+                task={t}
+                goals={goals}
+                projectId={projectId}
+                deadlineChangesCount={deadlineChangeCounts[t.id] ?? 0}
+              />
             ))
           )}
         </div>
@@ -349,10 +364,12 @@ function TaskRow({
   task,
   goals,
   projectId,
+  deadlineChangesCount,
 }: {
   task: ProjectTask
   goals: TrackerCustomDriver[]
   projectId: string
+  deadlineChangesCount: number
 }) {
   const [, startTransition] = useTransition()
   const [commentOpen, setCommentOpen] = useState(false)
@@ -396,20 +413,13 @@ function TaskRow({
         }
       />
 
-      <div className="flex items-center gap-1.5">
-        <span className="text-[11px] text-muted-foreground">Дедлайн</span>
-        <Input
-          type="date"
-          defaultValue={task.deadline ?? ''}
-          onBlur={(e) => {
-            const v = e.target.value || null
-            if (v !== task.deadline) {
-              startTransition(() => updateTask(task.id, projectId, { deadline: v }))
-            }
-          }}
-          className="h-7 w-36 text-xs"
-        />
-      </div>
+      <DeadlineCell
+        taskId={task.id}
+        taskTitle={task.title}
+        deadline={task.deadline}
+        projectId={projectId}
+        changeCount={deadlineChangesCount}
+      />
 
       {goals.length > 0 ? (
         <div className="flex items-center gap-1.5">
@@ -494,6 +504,198 @@ function TaskRow({
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+function DeadlineCell({
+  taskId,
+  taskTitle,
+  deadline,
+  projectId,
+  changeCount,
+}: {
+  taskId: string
+  taskTitle: string
+  deadline: string | null
+  projectId: string
+  changeCount: number
+}) {
+  const [open, setOpen] = useState(false)
+
+  const display = deadline
+    ? new Date(deadline).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
+    : '— нема —'
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-[11px] text-muted-foreground">Дедлайн</span>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className={cn(
+          'flex h-7 items-center gap-1 rounded-md border border-input bg-background px-2 text-xs hover:bg-muted/40',
+          !deadline && 'text-muted-foreground',
+        )}
+      >
+        <CalendarClock className="h-3 w-3" />
+        {display}
+        {changeCount > 0 ? (
+          <span className="ml-0.5 rounded-full bg-amber-500/15 px-1 text-[9px] font-medium text-amber-700 dark:text-amber-400">
+            ×{changeCount}
+          </span>
+        ) : null}
+      </button>
+      {open ? (
+        <DeadlineDialog
+          taskId={taskId}
+          taskTitle={taskTitle}
+          deadline={deadline}
+          projectId={projectId}
+          changeCount={changeCount}
+          onClose={() => setOpen(false)}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function DeadlineDialog({
+  taskId,
+  taskTitle,
+  deadline,
+  projectId,
+  changeCount,
+  onClose,
+}: {
+  taskId: string
+  taskTitle: string
+  deadline: string | null
+  projectId: string
+  changeCount: number
+  onClose: () => void
+}) {
+  const [, startTransition] = useTransition()
+  const router = useRouter()
+  const [newDate, setNewDate] = useState(deadline ?? '')
+  const [reason, setReason] = useState('')
+  const [history, setHistory] = useState<TaskDeadlineChange[] | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
+
+  const isChange = deadline !== null && newDate && newDate !== deadline
+  const reasonNeeded = isChange
+  const canSubmit = newDate !== '' && newDate !== deadline && (!reasonNeeded || reason.trim().length > 0)
+
+  useEffect(() => {
+    if (!historyOpen || history) return
+    let cancelled = false
+    ;(async () => {
+      const rows = await fetchDeadlineHistory(taskId)
+      if (!cancelled) setHistory(rows)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [historyOpen, history, taskId])
+
+  const submit = () => {
+    startTransition(async () => {
+      const res = await updateTaskDeadline(taskId, projectId, newDate || null, reason.trim() || undefined)
+      if (res?.error) {
+        toast.error(res.error)
+        return
+      }
+      router.refresh()
+      onClose()
+    })
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Дедлайн — {taskTitle}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 text-sm">
+          {deadline ? (
+            <div className="text-xs text-muted-foreground">
+              Поточний:{' '}
+              <span className="font-medium text-foreground">
+                {new Date(deadline).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+              </span>
+            </div>
+          ) : null}
+
+          <div className="space-y-1">
+            <Label className="text-xs">Нова дата</Label>
+            <Input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} />
+          </div>
+
+          {reasonNeeded ? (
+            <div className="space-y-1">
+              <Label className="text-xs">
+                Причина переносу <span className="text-destructive">*</span>
+              </Label>
+              <Textarea
+                rows={3}
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="Напр.: експерт хворіє, перенесли зйомки, чекаємо матеріал…"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Без причини змінити вже встановлений дедлайн не можна.
+              </p>
+            </div>
+          ) : null}
+
+          {changeCount > 0 ? (
+            <button
+              type="button"
+              onClick={() => setHistoryOpen((v) => !v)}
+              className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              <History className="h-3 w-3" />
+              {historyOpen ? 'Сховати історію' : `Історія перенесень (${changeCount})`}
+            </button>
+          ) : null}
+
+          {historyOpen ? (
+            history === null ? (
+              <p className="text-xs text-muted-foreground">Завантажую…</p>
+            ) : history.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Поки порожньо.</p>
+            ) : (
+              <ul className="space-y-1 rounded-md border bg-muted/30 p-2 text-xs">
+                {history.map((h) => (
+                  <li key={h.id} className="space-y-0.5">
+                    <div className="font-medium tabular-nums">
+                      {h.old_deadline
+                        ? new Date(h.old_deadline).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
+                        : '—'}{' '}
+                      → {' '}
+                      {h.new_deadline
+                        ? new Date(h.new_deadline).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
+                        : '—'}
+                      <span className="ml-2 text-[10px] text-muted-foreground">
+                        {new Date(h.changed_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+                      </span>
+                    </div>
+                    <div className="text-muted-foreground">{h.reason}</div>
+                  </li>
+                ))}
+              </ul>
+            )
+          ) : null}
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>
+            Відміна
+          </Button>
+          <Button disabled={!canSubmit} onClick={submit}>
+            Зберегти
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

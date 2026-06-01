@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 
 import { requireProfile } from '@/lib/auth'
 import { createClient } from '@/lib/supabase/server'
-import type { TaskStatus } from '@/lib/supabase/types'
+import type { TaskDeadlineChange, TaskStatus } from '@/lib/supabase/types'
 
 const revalidate = (projectId: string) => {
   revalidatePath(`/projects/${projectId}/tasks`)
@@ -109,7 +109,6 @@ export async function updateTask(
     title: string
     group_id: string | null
     status: TaskStatus
-    deadline: string | null
     comment: string | null
     linked_goal_id: string | null
   }>,
@@ -120,9 +119,61 @@ export async function updateTask(
   revalidate(projectId)
 }
 
+/**
+ * Окрема дія для зміни дедлайну. Якщо стара дата вже була і нова відрізняється —
+ * причина обовʼязкова і запис йде в історію `project_task_deadline_changes`.
+ * Перший раз дедлайн — без причини.
+ */
+export async function updateTaskDeadline(
+  taskId: string,
+  projectId: string,
+  newDeadline: string | null,
+  reason?: string,
+): Promise<{ error?: string } | undefined> {
+  const me = await requireProfile()
+  const supabase = await createClient()
+  const { data: cur } = await supabase
+    .from('project_tasks')
+    .select('deadline')
+    .eq('id', taskId)
+    .maybeSingle()
+  const oldDeadline = (cur?.deadline as string | null) ?? null
+  const newValue = newDeadline || null
+
+  if (oldDeadline === newValue) return
+
+  if (oldDeadline !== null && newValue !== oldDeadline) {
+    const trimmedReason = (reason ?? '').trim()
+    if (!trimmedReason) return { error: 'Введи причину переносу дедлайну' }
+    await supabase.from('project_task_deadline_changes').insert({
+      task_id: taskId,
+      project_id: projectId,
+      old_deadline: oldDeadline,
+      new_deadline: newValue,
+      reason: trimmedReason,
+      changed_by: me.id,
+    })
+  }
+
+  await supabase.from('project_tasks').update({ deadline: newValue }).eq('id', taskId)
+  revalidate(projectId)
+}
+
 export async function deleteTask(taskId: string, projectId: string): Promise<void> {
   await requireProfile()
   const supabase = await createClient()
   await supabase.from('project_tasks').delete().eq('id', taskId)
   revalidate(projectId)
+}
+
+/** Завантажити історію переносів дедлайну для попапу задачі. */
+export async function fetchDeadlineHistory(taskId: string): Promise<TaskDeadlineChange[]> {
+  await requireProfile()
+  const supabase = await createClient()
+  const { data } = await supabase
+    .from('project_task_deadline_changes')
+    .select('*')
+    .eq('task_id', taskId)
+    .order('changed_at', { ascending: false })
+  return (data ?? []) as TaskDeadlineChange[]
 }

@@ -14,6 +14,7 @@ export type FunnelType =
   | 'lead_magnet'
   | 'telegram_channel'
   | 'direct_landing'
+  | 'warm_launch'
 
 export const FUNNEL_TYPE_LABEL: Record<FunnelType, string> = {
   webinar: 'Вебінарна',
@@ -24,6 +25,7 @@ export const FUNNEL_TYPE_LABEL: Record<FunnelType, string> = {
   lead_magnet: 'Лід-магнітна',
   telegram_channel: 'Telegram-канал',
   direct_landing: 'Пряма продажа з лендингу',
+  warm_launch: 'Теплий запуск',
 }
 
 export const FUNNEL_TYPE_HINT: Record<FunnelType, string> = {
@@ -35,6 +37,7 @@ export const FUNNEL_TYPE_HINT: Record<FunnelType, string> = {
   lead_magnet: 'Безкоштовний матеріал → прогрів → продаж.',
   telegram_channel: 'Закупка у каналах → підписка → продаж.',
   direct_landing: 'Реклама → лендинг → оплата. Без проміжних шагів.',
+  warm_launch: 'Запуск через контент-органіку: сторіс, рілс, ефіри, пости. Без платної реклами.',
 }
 
 // ---------- Группа этапов (визуальная) ----------
@@ -120,6 +123,16 @@ export const STAGE_LIBRARY: StageTemplate[] = [
     label: 'Перехід на лендинг',
     group: 'entry',
     metrics: [{ key: 'count', label: 'Ліди', role: 'applications', unit: 'шт' }],
+  },
+  {
+    template: 'content_reach',
+    label: 'Охоплення від контенту',
+    group: 'entry',
+    metrics: [
+      { key: 'reach', label: 'Охоплення', role: 'other', unit: 'шт' },
+      { key: 'leads', label: 'Ліди', role: 'applications', unit: 'шт' },
+    ],
+    hint: 'Сумарне охоплення сторіс/рілс/постів/ефірів. Лід = той, хто проявив інтерес (написав, перейшов).',
   },
 
   // --- B. Прогрів ---
@@ -326,6 +339,7 @@ export const FUNNEL_DEFAULTS: Record<FunnelType, string[]> = {
   lead_magnet: ['lead_magnet_open', 'application', 'payment'],
   telegram_channel: ['subscribe_channel', 'bot_chain', 'application', 'payment'],
   direct_landing: ['landing_open', 'payment'],
+  warm_launch: ['content_reach', 'application', 'payment'],
 }
 
 // ---------- Утиліти ----------
@@ -352,6 +366,7 @@ const APPLICATION_MAIN_BY_TYPE: Partial<Record<FunnelType, string>> = {
   subscription: 'Заявки з підписки',
   direct_landing: 'Заявки з лендингу',
   tripwire: 'Заявки з мини-продукту',
+  warm_launch: 'Заявки з контенту',
 }
 
 export function metricLabelFor(

@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { getProject } from '@/lib/queries/projects'
 import {
   getCurrentMonthGoals,
+  getDeadlineChangeCountsByTask,
   getTaskGroups,
   getTasks,
 } from '@/lib/queries/tasks'
@@ -18,11 +19,13 @@ export default async function TasksPage({
   const project = await getProject(id)
   if (!project) notFound()
 
-  const [groups, tasks, goals] = await Promise.all([
+  const [groups, tasks, goals, countsMap] = await Promise.all([
     getTaskGroups(id),
     getTasks(id),
     getCurrentMonthGoals(id),
+    getDeadlineChangeCountsByTask(id),
   ])
+  const deadlineChangeCounts = Object.fromEntries(countsMap)
 
   return (
     <TasksView
@@ -30,6 +33,7 @@ export default async function TasksPage({
       groups={groups}
       tasks={tasks}
       goals={goals}
+      deadlineChangeCounts={deadlineChangeCounts}
     />
   )
 }

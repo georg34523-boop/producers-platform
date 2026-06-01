@@ -181,6 +181,38 @@ const InviteProducerSchema = z.object({
 })
 
 /** Створити нового продюсера + одразу призначити його на проєкт. */
+// ============================================================
+// Зміна валюти + курсу overrid'у проєкту
+// ============================================================
+const CurrencySchema = z.object({
+  project_id: z.uuid(),
+  currency: z.enum(['USD', 'EUR']),
+  usd_eur_rate_override: z.number().positive().optional().nullable(),
+})
+
+export async function updateProjectCurrency(input: {
+  project_id: string
+  currency: 'USD' | 'EUR'
+  usd_eur_rate_override: number | null
+}): Promise<{ error?: string } | undefined> {
+  const me = await requireProfile()
+  if (!isAdmin(me.role)) return { error: 'Тільки COO/CEO' }
+  const parsed = CurrencySchema.safeParse(input)
+  if (!parsed.success) return { error: 'Невірний формат курсу' }
+  const supabase = await createClient()
+  const { error } = await supabase
+    .from('projects')
+    .update({
+      currency: parsed.data.currency,
+      usd_eur_rate_override: parsed.data.usd_eur_rate_override,
+    })
+    .eq('id', parsed.data.project_id)
+  if (error) return { error: error.message }
+  revalidatePath(`/projects/${parsed.data.project_id}`)
+  revalidatePath('/projects')
+  revalidatePath('/')
+}
+
 export async function inviteProducerAndAssign(input: {
   project_id: string
   full_name: string

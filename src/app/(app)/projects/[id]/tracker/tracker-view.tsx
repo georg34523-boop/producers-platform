@@ -7,6 +7,7 @@ import { motion } from 'motion/react'
 
 import { CountUp } from '@/components/ui/count-up'
 import { ProgressBar } from '@/components/ui/progress-bar'
+import { CURRENCY_SYMBOL, type Currency } from '@/lib/currency'
 import { drawLine, easeOut } from '@/lib/motion'
 
 import { Badge } from '@/components/ui/badge'
@@ -207,6 +208,8 @@ export function TrackerView({
   weeklyPlans,
   products,
   outstandingReceivable,
+  currency,
+  rate,
 }: {
   projectId: string
   tracker: MonthlyTracker
@@ -214,6 +217,8 @@ export function TrackerView({
   weeklyPlans: TrackerWeeklyPlan[]
   products: Product[]
   outstandingReceivable: number
+  currency: Currency
+  rate: number
 }) {
   return (
     <div className="space-y-6">
@@ -224,8 +229,9 @@ export function TrackerView({
         weeklyPlans={weeklyPlans}
         funnels={funnels}
         outstandingReceivable={outstandingReceivable}
+        currency={currency}
       />
-      <FunnelsSection projectId={projectId} tracker={tracker} funnels={funnels} products={products} />
+      <FunnelsSection projectId={projectId} tracker={tracker} funnels={funnels} products={products} currency={currency} rate={rate} />
       <ReflectionDialog projectId={projectId} tracker={tracker} />
     </div>
   )
@@ -281,12 +287,14 @@ function BlockA({
   weeklyPlans,
   funnels,
   outstandingReceivable,
+  currency,
 }: {
   projectId: string
   tracker: MonthlyTracker
   weeklyPlans: TrackerWeeklyPlan[]
   funnels: FullFunnel[]
   outstandingReceivable: number
+  currency: Currency
 }) {
   const weeks = weeksOfMonth(tracker.year, tracker.month)
   const planByWeek = new Map(weeklyPlans.map((p) => [p.week_index, Number(p.revenue_plan)]))
@@ -322,11 +330,11 @@ function BlockA({
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-5">
-          <Stat title="Ціль (середня)" value={fmt(Number(tracker.revenue_plan_avg))} />
-          <Stat title="Факт місяця" value={fmt(totalFact)} highlight />
+          <Stat title={`Ціль (середня), ${CURRENCY_SYMBOL[currency]}`} value={fmt(Number(tracker.revenue_plan_avg))} />
+          <Stat title={`Факт місяця, ${CURRENCY_SYMBOL[currency]}`} value={fmt(totalFact)} highlight />
           <Stat title="% виконання" value={`${pct}%`} />
-          <Stat title="Залишилось" value={fmt(remaining)} />
-          <Stat title="Дебіторка проєкту" value={fmt(outstandingReceivable)} />
+          <Stat title={`Залишилось, ${CURRENCY_SYMBOL[currency]}`} value={fmt(remaining)} />
+          <Stat title={`Дебіторка проєкту, ${CURRENCY_SYMBOL[currency]}`} value={fmt(outstandingReceivable)} />
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
@@ -512,11 +520,15 @@ function FunnelsSection({
   tracker,
   funnels,
   products,
+  currency,
+  rate,
 }: {
   projectId: string
   tracker: MonthlyTracker
   funnels: FullFunnel[]
   products: Product[]
+  currency: Currency
+  rate: number
 }) {
   const [openId, setOpenId] = useState<string | null>(null)
   const [newOpen, setNewOpen] = useState(false)
@@ -569,7 +581,7 @@ function FunnelsSection({
                   ) : null}
                 </DialogTitle>
               </DialogHeader>
-              <FunnelDetail funnel={openFunnel} projectId={projectId} products={products} allFunnels={funnels} year={tracker.year} month={tracker.month} />
+              <FunnelDetail funnel={openFunnel} projectId={projectId} products={products} allFunnels={funnels} year={tracker.year} month={tracker.month} projectCurrency={currency} rate={rate} />
             </>
           ) : null}
         </DialogContent>
@@ -818,6 +830,8 @@ function FunnelDetail({
   allFunnels,
   year,
   month,
+  projectCurrency,
+  rate,
 }: {
   funnel: FullFunnel
   projectId: string
@@ -825,22 +839,29 @@ function FunnelDetail({
   allFunnels: FullFunnel[]
   year: number
   month: number
+  projectCurrency: Currency
+  rate: number
 }) {
   const attachedProducts = useMemo(
     () => products.filter((p) => funnel.product_ids.includes(p.id)),
     [products, funnel.product_ids],
   )
   const otherFunnels = useMemo(() => allFunnels.filter((f) => f.id !== funnel.id), [allFunnels, funnel.id])
+  const trafficCurrency: Currency = funnel.traffic_currency ?? projectCurrency
+  const derivedCtx = useMemo(
+    () => ({ revenueCurrency: projectCurrency, trafficCurrency, usdEurRate: rate }),
+    [projectCurrency, trafficCurrency, rate],
+  )
   return (
     <div className="space-y-5">
-      <FunnelSettings funnel={funnel} projectId={projectId} products={products} />
-      <DerivedStats funnel={funnel} />
+      <FunnelSettings funnel={funnel} projectId={projectId} products={products} projectCurrency={projectCurrency} />
+      <DerivedStats funnel={funnel} derivedCtx={derivedCtx} />
       {funnel.reactivations_in.length > 0 ? (
         <ReactivationInSection funnel={funnel} allFunnels={allFunnels} />
       ) : null}
       <FunnelStages funnel={funnel} projectId={projectId} />
       {attachedProducts.length > 1 ? (
-        <ProductSalesSection funnel={funnel} projectId={projectId} products={attachedProducts} year={year} month={month} />
+        <ProductSalesSection funnel={funnel} projectId={projectId} products={attachedProducts} year={year} month={month} currency={projectCurrency} />
       ) : null}
       {otherFunnels.length > 0 ? (
         <ReactivationOutSection funnel={funnel} projectId={projectId} otherFunnels={otherFunnels} year={year} month={month} />
@@ -852,6 +873,8 @@ function FunnelDetail({
         month={month}
         products={attachedProducts.length > 0 ? attachedProducts : products}
         otherFunnels={otherFunnels}
+        currency={projectCurrency}
+        derivedCtx={derivedCtx}
       />
     </div>
   )
@@ -990,12 +1013,14 @@ function ProductSalesSection({
   products,
   year,
   month,
+  currency,
 }: {
   funnel: FullFunnel
   projectId: string
   products: Product[]
   year: number
   month: number
+  currency: Currency
 }) {
   const [, startTransition] = useTransition()
   const [day, setDay] = useState(dayIso(year, month, new Date().getUTCDate()))
@@ -1038,8 +1063,8 @@ function ProductSalesSection({
       <div className="mb-2 flex items-center justify-between">
         <div className="text-sm font-medium">Продажі по продуктах</div>
         <div className="text-xs text-muted-foreground tabular-nums">
-          {fmt(totalCount)} шт · {fmt(totalAmount)} $
-          {totalReceivable > 0 ? <> · дебіторка {fmt(totalReceivable)} $</> : null}
+          {fmt(totalCount)} шт · {fmt(totalAmount)} {CURRENCY_SYMBOL[currency]}
+          {totalReceivable > 0 ? <> · дебіторка {fmt(totalReceivable)} {CURRENCY_SYMBOL[currency]}</> : null}
         </div>
       </div>
 
@@ -1055,8 +1080,8 @@ function ProductSalesSection({
           ))}
         </select>
         <Input type="number" min={0} step={1} value={count} onChange={(e) => setCount(e.target.value)} placeholder="К-сть" className="h-8 text-xs" />
-        <Input type="number" min={0} step="any" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Зайшло $" className="h-8 text-xs" />
-        <Input type="number" min={0} step="any" value={receivable} onChange={(e) => setReceivable(e.target.value)} placeholder="Дебіт. $" className="h-8 text-xs" />
+        <Input type="number" min={0} step="any" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={`Зайшло ${CURRENCY_SYMBOL[currency]}`} className="h-8 text-xs" />
+        <Input type="number" min={0} step="any" value={receivable} onChange={(e) => setReceivable(e.target.value)} placeholder={`Дебіт. ${CURRENCY_SYMBOL[currency]}`} className="h-8 text-xs" />
         <Button size="sm" onClick={submit} disabled={!productId || (!count && !amount && !receivable)}>+ Продаж</Button>
       </div>
 
@@ -1068,6 +1093,7 @@ function ProductSalesSection({
               row={r}
               productName={productName.get(r.product_id) ?? '—'}
               projectId={projectId}
+              currency={currency}
             />
           ))}
         </ul>
@@ -1082,10 +1108,12 @@ function ProductSaleRow({
   row,
   productName,
   projectId,
+  currency,
 }: {
   row: FunnelProductSale
   productName: string
   projectId: string
+  currency: Currency
 }) {
   const [, startTransition] = useTransition()
   const [payingOpen, setPayingOpen] = useState(false)
@@ -1109,9 +1137,9 @@ function ProductSaleRow({
       </span>
       <span className="flex-1 truncate">{productName}</span>
       <span>{fmt(row.count)} шт</span>
-      <span className="font-medium">{fmt(Number(row.amount))} $</span>
+      <span className="font-medium">{fmt(Number(row.amount))} {CURRENCY_SYMBOL[currency]}</span>
       <span className={cn(receivable > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground')}>
-        борг {fmt(receivable)} $
+        борг {fmt(receivable)} {CURRENCY_SYMBOL[currency]}
       </span>
       {receivable > 0 ? (
         payingOpen ? (
@@ -1166,8 +1194,17 @@ function ProductSaleRow({
 }
 
 // Автоматичні розрахункові метрики
-function DerivedStats({ funnel }: { funnel: FullFunnel }) {
-  const derived = useMemo(() => computeDerivedMetrics(funnel.metrics, funnel.log), [funnel])
+function DerivedStats({
+  funnel,
+  derivedCtx,
+}: {
+  funnel: FullFunnel
+  derivedCtx: { revenueCurrency: Currency; trafficCurrency: Currency; usdEurRate: number }
+}) {
+  const derived = useMemo(
+    () => computeDerivedMetrics(funnel.metrics, funnel.log, undefined, derivedCtx),
+    [funnel, derivedCtx],
+  )
   const conversions = useMemo(() => computeStageConversions(funnel.metrics, funnel.log), [funnel])
 
   if (derived.length === 0 && conversions.length === 0) return null
@@ -1211,10 +1248,12 @@ function FunnelSettings({
   funnel,
   projectId,
   products,
+  projectCurrency,
 }: {
   funnel: FullFunnel
   projectId: string
   products: Product[]
+  projectCurrency: Currency
 }) {
   const [, startTransition] = useTransition()
   const [newPriceName, setNewPriceName] = useState('')
@@ -1336,25 +1375,46 @@ function FunnelSettings({
           Платний трафік
         </label>
         {funnel.traffic_enabled ? (
-          <div className="flex flex-1 flex-wrap items-center gap-1.5">
-            <span className="text-xs text-muted-foreground">Канали:</span>
-            {TRAFFIC_CHANNELS.map((c) => {
-              const active = (funnel.traffic_channels ?? []).includes(c)
-              return (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => toggleChannel(c)}
-                  className={cn(
-                    'rounded-md border px-2 py-0.5 text-[11px] transition-colors',
-                    active ? 'border-foreground bg-muted' : 'text-muted-foreground hover:bg-muted/30',
-                  )}
-                >
-                  {c}
-                </button>
-              )
-            })}
-          </div>
+          <>
+            <div className="flex flex-1 flex-wrap items-center gap-1.5">
+              <span className="text-xs text-muted-foreground">Канали:</span>
+              {TRAFFIC_CHANNELS.map((c) => {
+                const active = (funnel.traffic_channels ?? []).includes(c)
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => toggleChannel(c)}
+                    className={cn(
+                      'rounded-md border px-2 py-0.5 text-[11px] transition-colors',
+                      active ? 'border-foreground bg-muted' : 'text-muted-foreground hover:bg-muted/30',
+                    )}
+                  >
+                    {c}
+                  </button>
+                )
+              })}
+            </div>
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              Валюта трафіку:
+              <select
+                value={funnel.traffic_currency ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value
+                  startTransition(() =>
+                    updateFunnel(funnel.id, projectId, {
+                      traffic_currency: v === '' ? null : (v as Currency),
+                    }),
+                  )
+                }}
+                className="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
+              >
+                <option value="">за замовч. ({projectCurrency})</option>
+                <option value="USD">USD ($)</option>
+                <option value="EUR">EUR (€)</option>
+              </select>
+            </label>
+          </>
         ) : null}
         <Button
           variant="ghost"
@@ -1657,6 +1717,8 @@ function FunnelLog({
   month,
   products,
   otherFunnels,
+  currency,
+  derivedCtx,
 }: {
   funnel: FullFunnel
   projectId: string
@@ -1664,6 +1726,8 @@ function FunnelLog({
   month: number
   products: Product[]
   otherFunnels: FullFunnel[]
+  currency: Currency
+  derivedCtx: { revenueCurrency: Currency; trafficCurrency: Currency; usdEurRate: number }
 }) {
   const [addOpen, setAddOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -1713,6 +1777,7 @@ function FunnelLog({
         hasPaymentStage={hasPaymentStage}
         products={products}
         otherFunnels={otherFunnels}
+        currency={currency}
         open={addOpen}
         onOpenChange={setAddOpen}
       />
@@ -1721,6 +1786,7 @@ function FunnelLog({
         funnel={funnel}
         projectId={projectId}
         editableMetrics={editableMetrics}
+        derivedCtx={derivedCtx}
         open={historyOpen}
         onOpenChange={setHistoryOpen}
       />
@@ -1737,6 +1803,7 @@ function AddDayDialog({
   hasPaymentStage,
   products,
   otherFunnels,
+  currency,
   open,
   onOpenChange,
 }: {
@@ -1748,6 +1815,7 @@ function AddDayDialog({
   hasPaymentStage: boolean
   products: Product[]
   otherFunnels: FullFunnel[]
+  currency: Currency
   open: boolean
   onOpenChange: (o: boolean) => void
 }) {
@@ -1957,9 +2025,9 @@ function AddDayDialog({
                         <li key={s.id} className="flex items-center justify-between gap-2 px-2 py-1.5 tabular-nums">
                           <span className="flex-1 truncate">{productName.get(s.product_id) ?? '—'}</span>
                           <span>{fmt(s.count)} шт</span>
-                          <span className="font-medium">{fmt(Number(s.amount))} $</span>
+                          <span className="font-medium">{fmt(Number(s.amount))} {CURRENCY_SYMBOL[currency]}</span>
                           <span className={cn(Number(s.receivable_amount) > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground')}>
-                            борг {fmt(Number(s.receivable_amount))} $
+                            борг {fmt(Number(s.receivable_amount))} {CURRENCY_SYMBOL[currency]}
                           </span>
                           <button
                             type="button"
@@ -2003,7 +2071,7 @@ function AddDayDialog({
                       step="any"
                       value={payAmount}
                       onChange={(e) => setPayAmount(e.target.value)}
-                      placeholder="Зайшло $"
+                      placeholder={`Зайшло ${CURRENCY_SYMBOL[currency]}`}
                       className="h-8 text-xs"
                     />
                     <Input
@@ -2012,7 +2080,7 @@ function AddDayDialog({
                       step="any"
                       value={payReceivable}
                       onChange={(e) => setPayReceivable(e.target.value)}
-                      placeholder="Дебіт. $"
+                      placeholder={`Дебіт. ${CURRENCY_SYMBOL[currency]}`}
                       className="h-8 text-xs"
                     />
                     <Button
@@ -2030,8 +2098,19 @@ function AddDayDialog({
           ) : null}
 
           <div className="space-y-1">
-            <Label className="text-xs">Коментар (опц.)</Label>
-            <Textarea rows={2} value={comment} onChange={(e) => setComment(e.target.value)} />
+            <Label className="text-xs">
+              {funnel.funnel_type === 'warm_launch' ? 'Активність дня / тижня' : 'Коментар (опц.)'}
+            </Label>
+            <Textarea
+              rows={funnel.funnel_type === 'warm_launch' ? 3 : 2}
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              placeholder={
+                funnel.funnel_type === 'warm_launch'
+                  ? 'Сторіс зранку про кейс. Ефір ввечері з відповідями. Рілс із результатами…'
+                  : undefined
+              }
+            />
           </div>
         </div>
         <DialogFooter>
@@ -2049,12 +2128,14 @@ function HistoryDialog({
   funnel,
   projectId,
   editableMetrics,
+  derivedCtx,
   open,
   onOpenChange,
 }: {
   funnel: FullFunnel
   projectId: string
   editableMetrics: FunnelMetric[]
+  derivedCtx: { revenueCurrency: Currency; trafficCurrency: Currency; usdEurRate: number }
   open: boolean
   onOpenChange: (o: boolean) => void
 }) {
@@ -2081,8 +2162,8 @@ function HistoryDialog({
   const inRange = (d: string) => d >= from && d <= to
   const filteredLog = useMemo(() => funnel.log.filter((r) => inRange(r.day_date)), [funnel.log, from, to])
   const derived = useMemo(
-    () => computeDerivedMetrics(funnel.metrics, funnel.log, inRange),
-    [funnel.metrics, funnel.log, from, to],
+    () => computeDerivedMetrics(funnel.metrics, funnel.log, inRange, derivedCtx),
+    [funnel.metrics, funnel.log, from, to, derivedCtx],
   )
 
   // Сортування за position (ручний порядок стейджів є джерелом істини)

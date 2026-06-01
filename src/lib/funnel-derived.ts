@@ -1,6 +1,7 @@
 // Автоматичні розрахункові метрики воронки.
 // Не зберігаються в БД — рахуються на льоту для відображення.
 
+import { convert, type Currency } from '@/lib/currency'
 import type { FunnelDailyLog, FunnelMetric } from '@/lib/supabase/types'
 
 function sumByKey(log: FunnelDailyLog[], key: string, inRange?: (d: string) => boolean): number {
@@ -26,13 +27,26 @@ export type DerivedMetric = {
 }
 
 /** Усі автоматичні агрегати воронки за період. */
+export type DerivedCurrencyContext = {
+  revenueCurrency: Currency
+  trafficCurrency: Currency
+  usdEurRate: number
+}
+
 export function computeDerivedMetrics(
   metrics: FunnelMetric[],
   log: FunnelDailyLog[],
   inRange?: (d: string) => boolean,
+  ctx?: DerivedCurrencyContext,
 ): DerivedMetric[] {
   const sum = (key: string) => sumByKey(log, key, inRange)
   const out: DerivedMetric[] = []
+  const revenueSymbol = ctx ? (ctx.revenueCurrency === 'EUR' ? '€' : '$') : '$'
+  const trafficSymbol = ctx ? (ctx.trafficCurrency === 'EUR' ? '€' : '$') : '$'
+  const spentInRevenue = (raw: number) => {
+    if (!ctx) return raw
+    return convert(raw, ctx.trafficCurrency, ctx.revenueCurrency, ctx.usdEurRate)
+  }
 
   // Опорні значення — підбираємо за роллю/stage_group/лейблом, а не точними ключами
   const spentM =
@@ -81,13 +95,16 @@ export function computeDerivedMetrics(
     out.push({ key: 'total_apps', label: 'Всього заявок', value: applications, unit: 'шт' })
   }
 
-  // CPM = (spent / impressions) × 1000
+  // Для ROAS/ROMI/CPL/CPC/CPM перераховуємо spent у валюту виручки
+  const spentInRev = spentInRevenue(spent)
+
+  // CPM = (spent / impressions) × 1000 — показуємо у валюті трафіку (це ціна реклами)
   if (spent > 0 && impressions > 0) {
-    out.push({ key: 'cpm', label: 'CPM', value: (spent / impressions) * 1000, unit: '$' })
+    out.push({ key: 'cpm', label: 'CPM', value: (spent / impressions) * 1000, unit: trafficSymbol })
   }
-  // CPC = spent / clicks
+  // CPC = spent / clicks — у валюті трафіку
   if (spent > 0 && clicks > 0) {
-    out.push({ key: 'cpc', label: 'CPC', value: spent / clicks, unit: '$' })
+    out.push({ key: 'cpc', label: 'CPC', value: spent / clicks, unit: trafficSymbol })
   }
   // CTR = clicks / impressions × 100
   if (clicks > 0 && impressions > 0) {
@@ -97,25 +114,25 @@ export function computeDerivedMetrics(
   if (applications > 0 && clicks > 0) {
     out.push({ key: 'cr_landing', label: 'CR сайту', value: (applications / clicks) * 100, unit: '%' })
   }
-  // CPL = spent / applications
+  // CPL = spent / applications — у валюті трафіку
   if (spent > 0 && applications > 0) {
-    out.push({ key: 'cpl', label: 'CPL', value: spent / applications, unit: '$' })
+    out.push({ key: 'cpl', label: 'CPL', value: spent / applications, unit: trafficSymbol })
   }
-  // ROAS = revenue / spent × 100
-  if (revenue > 0 && spent > 0) {
-    out.push({ key: 'roas', label: 'ROAS', value: (revenue / spent) * 100, unit: '%' })
+  // ROAS = revenue / spent_in_revenue_currency × 100 (виправно, навіть якщо валюти різні)
+  if (revenue > 0 && spentInRev > 0) {
+    out.push({ key: 'roas', label: 'ROAS', value: (revenue / spentInRev) * 100, unit: '%' })
   }
-  // ROMI = (revenue − spent) / spent × 100
-  if (spent > 0) {
-    out.push({ key: 'romi', label: 'ROMI', value: ((revenue - spent) / spent) * 100, unit: '%' })
+  // ROMI = (revenue − spent_in_revenue_currency) / spent_in_revenue_currency × 100
+  if (spentInRev > 0) {
+    out.push({ key: 'romi', label: 'ROMI', value: ((revenue - spentInRev) / spentInRev) * 100, unit: '%' })
   }
-  // Середній чек = revenue (основний продукт) / sales (основний продукт)
+  // Середній чек = revenue (основний продукт) / sales (основний продукт) — у валюті виручки
   if (revenueMainAmount > 0 && sales > 0) {
     out.push({
       key: 'avg_check',
       label: 'Середній чек',
       value: revenueMainAmount / sales,
-      unit: '$',
+      unit: revenueSymbol,
       hint: 'Без врахування мини-продукту',
     })
   }
@@ -124,7 +141,7 @@ export function computeDerivedMetrics(
     out.push({ key: 'mini_count', label: 'Покупок мини', value: miniSales, unit: 'шт' })
   }
   if (revenueMiniAmount > 0) {
-    out.push({ key: 'mini_amount', label: 'Сума мини', value: revenueMiniAmount, unit: '$' })
+    out.push({ key: 'mini_amount', label: 'Сума мини', value: revenueMiniAmount, unit: revenueSymbol })
   }
   return out
 }

@@ -29,6 +29,8 @@ export interface Project {
   work_model: WorkModel
   fix_amount: number | null
   model_started_at: string
+  currency: 'USD' | 'EUR'
+  usd_eur_rate_override: number | null
   created_at: string
   created_by: string | null
 }
@@ -129,6 +131,7 @@ export interface Funnel {
   traffic_enabled: boolean
   traffic_channel: string | null
   traffic_channels: string[]
+  traffic_currency: 'USD' | 'EUR' | null
   position: number
   created_at: string
 }
@@ -211,6 +214,17 @@ export interface ProjectTask {
   position: number
   created_at: string
   created_by: string | null
+}
+
+export interface TaskDeadlineChange {
+  id: string
+  task_id: string
+  project_id: string
+  old_deadline: string | null
+  new_deadline: string | null
+  reason: string
+  changed_at: string
+  changed_by: string | null
 }
 
 export interface ProjectExpense {

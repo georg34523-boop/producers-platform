@@ -1,5 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { CountUp } from '@/components/ui/count-up'
+import { CURRENCY_SYMBOL, type Currency } from '@/lib/currency'
 import { MONTH_LABEL_RU } from '@/lib/labels'
 import type { ProjectAllTimeTotals } from '@/lib/queries/tracker'
 
@@ -10,9 +11,13 @@ function fmtMonth(ym: { year: number; month: number }): string {
 export function AllTimeStats({
   totals,
   outstandingReceivable,
+  currency,
+  trafficCurrency,
 }: {
   totals: ProjectAllTimeTotals
   outstandingReceivable: number
+  currency: Currency
+  trafficCurrency: Currency
 }) {
   if (totals.months_count === 0) return null
   const monthsWord =
@@ -37,16 +42,16 @@ export function AllTimeStats({
       </CardHeader>
       <CardContent>
         <div className="grid gap-3 sm:grid-cols-5">
-          <AllTimeTile label="Виручка" suffix=" $" value={totals.revenue} />
+          <AllTimeTile label="Виручка" suffix={` ${CURRENCY_SYMBOL[currency]}`} value={totals.revenue} />
           <AllTimeTile
             label="Дебіторка (актуальна)"
-            suffix=" $"
+            suffix={` ${CURRENCY_SYMBOL[currency]}`}
             value={outstandingReceivable}
             tone={outstandingReceivable > 0 ? 'amber' : 'muted'}
           />
           <AllTimeTile label="Продажі" suffix=" шт" value={totals.sales} />
           <AllTimeTile label="Заявки" value={totals.applications} />
-          <AllTimeTile label="Трафік" suffix=" $" value={totals.traffic_spend} />
+          <AllTimeTile label="Трафік" suffix={` ${CURRENCY_SYMBOL[trafficCurrency]}`} value={totals.traffic_spend} />
         </div>
       </CardContent>
     </Card>

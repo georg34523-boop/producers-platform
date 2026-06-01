@@ -283,6 +283,7 @@ export async function updateFunnel(
     traffic_enabled: boolean
     traffic_channel: string | null
     traffic_channels: string[]
+    traffic_currency: 'USD' | 'EUR' | null
   }>,
 ): Promise<void> {
   await requireProfile()

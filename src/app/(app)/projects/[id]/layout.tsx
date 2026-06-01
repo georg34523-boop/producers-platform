@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { requireProfile } from '@/lib/auth'
 import { PROJECT_STATUS_LABEL, WORK_MODEL_LABEL } from '@/lib/labels'
+import { getUsdEurRate } from '@/lib/queries/currency'
 import { listProfiles } from '@/lib/queries/profiles'
 import { getProject, listProjects } from '@/lib/queries/projects'
 
@@ -23,10 +24,11 @@ export default async function ProjectLayout({
   const { id } = await params
   const me = await requireProfile()
   const isAdmin = me.role === 'coo' || me.role === 'ceo'
-  const [project, allProjects, producers] = await Promise.all([
+  const [project, allProjects, producers, rateInfo] = await Promise.all([
     getProject(id),
     listProjects(),
     isAdmin ? listProfiles({ roles: ['producer', 'coo', 'ceo'] }) : Promise.resolve([]),
+    isAdmin ? getUsdEurRate() : Promise.resolve({ rate: 0.92, fetched_at: new Date().toISOString(), source: 'fallback' as const }),
   ])
   if (!project) notFound()
 
@@ -55,6 +57,10 @@ export default async function ProjectLayout({
                 projectName={project.expert_name}
                 currentProducerId={project.producer_id}
                 producers={producers}
+                currency={project.currency}
+                rateOverride={project.usd_eur_rate_override}
+                liveRate={rateInfo.rate}
+                liveRateUpdatedAt={rateInfo.fetched_at}
               />
             ) : null}
           </div>

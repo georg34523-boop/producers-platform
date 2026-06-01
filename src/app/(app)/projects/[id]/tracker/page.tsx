@@ -1,3 +1,8 @@
+import { notFound } from 'next/navigation'
+
+import { projectRate } from '@/lib/currency'
+import { getUsdEurRate } from '@/lib/queries/currency'
+import { getProject } from '@/lib/queries/projects'
 import { listProducts } from '@/lib/queries/products'
 import {
   getFunnels,
@@ -31,12 +36,16 @@ export default async function TrackerPage({
   }
 
   const tracker = await getOrCreateTracker(id, year, month)
-  const [funnels, weeklyPlans, products, outstandingReceivable] = await Promise.all([
+  const project = await getProject(id)
+  if (!project) notFound()
+  const [funnels, weeklyPlans, products, outstandingReceivable, liveRate] = await Promise.all([
     getFunnels(tracker.id),
     getWeeklyPlans(tracker.id),
     listProducts(id),
     getProjectOutstandingReceivable(id),
+    getUsdEurRate(),
   ])
+  const rate = projectRate(liveRate.rate, project.usd_eur_rate_override)
 
   return (
     <TrackerView
@@ -46,6 +55,8 @@ export default async function TrackerPage({
       weeklyPlans={weeklyPlans}
       products={products.filter((p) => p.status === 'active')}
       outstandingReceivable={outstandingReceivable}
+      currency={project.currency}
+      rate={rate}
     />
   )
 }

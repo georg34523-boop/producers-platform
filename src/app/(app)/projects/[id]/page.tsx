@@ -87,7 +87,12 @@ export default async function ProjectOverviewPage({
 
   return (
     <div className="space-y-6">
-      <AllTimeStats totals={allTimeTotals} outstandingReceivable={outstandingReceivable} />
+      <AllTimeStats
+        totals={allTimeTotals}
+        outstandingReceivable={outstandingReceivable}
+        currency={project.currency}
+        trafficCurrency={project.currency}
+      />
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Цілі місяця</CardTitle>

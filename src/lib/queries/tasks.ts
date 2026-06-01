@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import type {
   ProjectTask,
   ProjectTaskGroup,
+  TaskDeadlineChange,
   TrackerCustomDriver,
 } from '@/lib/supabase/types'
 
@@ -49,4 +50,31 @@ export async function getCurrentMonthGoals(
     .eq('tracker_id', tracker.id)
     .order('position')
   return (data ?? []) as TrackerCustomDriver[]
+}
+
+/** Історія перенесень дедлайну однієї задачі (найновіше — спершу). */
+export async function getTaskDeadlineHistory(taskId: string): Promise<TaskDeadlineChange[]> {
+  const supabase = await createClient()
+  const { data } = await supabase
+    .from('project_task_deadline_changes')
+    .select('*')
+    .eq('task_id', taskId)
+    .order('changed_at', { ascending: false })
+  return (data ?? []) as TaskDeadlineChange[]
+}
+
+/** Кількість перенесень дедлайну по всіх задачах проєкту (для бейджів). */
+export async function getDeadlineChangeCountsByTask(
+  projectId: string,
+): Promise<Map<string, number>> {
+  const supabase = await createClient()
+  const { data } = await supabase
+    .from('project_task_deadline_changes')
+    .select('task_id')
+    .eq('project_id', projectId)
+  const counts = new Map<string, number>()
+  for (const r of (data ?? []) as { task_id: string }[]) {
+    counts.set(r.task_id, (counts.get(r.task_id) ?? 0) + 1)
+  }
+  return counts
 }

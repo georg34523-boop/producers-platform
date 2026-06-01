@@ -1,5 +1,6 @@
 import 'server-only'
 
+import type { Currency } from '@/lib/currency'
 import { createClient } from '@/lib/supabase/server'
 import type { FunnelDailyLog, FunnelMetric, Profile } from '@/lib/supabase/types'
 
@@ -17,6 +18,7 @@ export type DashboardRow = {
   producer_name: string | null
   work_model: string
   status: string
+  currency: Currency
   revenue_plan_min: number
   revenue_plan_avg: number
   revenue_plan_max: number
@@ -50,7 +52,7 @@ export async function listDashboard(): Promise<DashboardRow[]> {
   const { data: projects, error } = await supabase
     .from('projects')
     .select(
-      `id, expert_name, work_model, status,
+      `id, expert_name, work_model, status, currency,
        producer:profiles!projects_producer_id_fkey(full_name, email)`,
     )
     .neq('status', 'archived')
@@ -62,6 +64,7 @@ export async function listDashboard(): Promise<DashboardRow[]> {
     expert_name: string
     work_model: string
     status: string
+    currency: Currency
     producer: Pick<Profile, 'full_name' | 'email'> | null
   }
   const list = (projects ?? []) as unknown as Raw[]
@@ -169,6 +172,7 @@ export async function listDashboard(): Promise<DashboardRow[]> {
       producer_name: p.producer?.full_name ?? p.producer?.email ?? null,
       work_model: p.work_model,
       status: p.status,
+      currency: (p.currency as Currency) ?? 'USD',
       revenue_plan_min: plans.min,
       revenue_plan_avg: plans.avg,
       revenue_plan_max: plans.max,
